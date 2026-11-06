@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 一键扫邻居域名: 扫 VPS 所在 /24 的 443, 从证书里挖域名, 再用 RealityChecker 过滤
+# 一键扫邻居域名: 扫 VPS 所在 /23 的 443, 从证书里挖域名, 再用 RealityChecker 过滤
 #
 # 用法 (在 Linux VPS 上):
-#   bash scan-neighbors.sh                  # 自动探测本机公网 IP, 扫它所在的 /24
-#   bash scan-neighbors.sh 154.9.236.158    # 指定 IP, 扫它所在的 /24
+#   bash scan-neighbors.sh                  # 自动探测本机公网 IP, 扫它所在的 /23
+#   bash scan-neighbors.sh 154.9.236.158    # 指定 IP, 扫它所在的 /23
 #   bash scan-neighbors.sh 154.9.236.0/24   # 直接指定网段
 #   bash scan-neighbors.sh 154.9.236.158 file2.csv   # 指定输出文件名
 #   bash scan-neighbors.sh --dry-run [IP或网段]      # 只打印要执行的命令, 不真扫
@@ -24,8 +24,8 @@ die()  { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
 usage() {
   printf '%s\n' "用法: bash scan-neighbors.sh [IP或网段] [输出csv] [--dry-run]"
-  printf '%s\n' "  不给 IP: 自动探测本机公网 IP, 扫它所在的 /24"
-  printf '%s\n' "  只给 IP: 如 154.9.236.158, 自动换成 154.9.236.0/24 再扫"
+  printf '%s\n' "  不给 IP: 自动探测本机公网 IP, 扫它所在的 /23"
+  printf '%s\n' "  只给 IP: 如 154.9.236.158, 自动换成 154.9.236.0/23 再扫"
   printf '%s\n' "  给网段: 如 154.9.236.0/24, 直接扫这个网段"
   printf '%s\n' "  --csv 文件: 使用已有扫描结果，跳过扫描"
   printf '%s\n' "  --dry-run: 只打印要执行的命令, 不下载不扫描"
@@ -76,7 +76,7 @@ public_ip() {
   printf '%s' "$ip"
 }
 
-# ---- 目标网段: 裸 IP 一律换成它所在的 /24 (单个 IP 会触发扫描器的 infinity 模式, 一直扫不停) ----
+# ---- 目标网段: 裸 IP 一律换成它所在的 /23 (单个 IP 会触发扫描器的 infinity 模式, 一直扫不停) ----
 if [ -z "$TARGET" ] && [ -z "$EXISTING_CSV" ]; then
   TARGET="$(public_ip)"
   [ -n "$TARGET" ] || die "探测不到本机公网 IP, 请手动指定: bash $0 <VPS IP 或网段>"
@@ -85,7 +85,11 @@ CIDR=""
 if [ -z "$EXISTING_CSV" ]; then
   case "$TARGET" in
     */*) CIDR="$TARGET" ;;
-    *.*.*.*) CIDR="${TARGET%.*}.0/24" ;;
+    *.*.*.*)
+      if [[ ! "$TARGET" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then die "IPv4 地址无效: $TARGET"; fi
+      a=${BASH_REMATCH[1]}; b=${BASH_REMATCH[2]}; c=${BASH_REMATCH[3]}; d=${BASH_REMATCH[4]}
+      for n in "$a" "$b" "$c" "$d"; do (( 10#$n <= 255 )) || die "IPv4 地址无效: $TARGET"; done
+      CIDR="$((10#$a)).$((10#$b)).$((10#$c / 2 * 2)).0/23" ;;
     *) die "IP/网段无效: $TARGET" ;;
   esac
 fi
@@ -179,5 +183,6 @@ except (OSError, UnicodeError, csv.Error, ValueError) as exc:
 PYCODE
 
 info "开始用 RealityChecker 检测证书域名（包括未匹配的域名）..."
-"$CHECKER" csv "$COMPAT" || die "RealityChecker 执行失败"
+set -o pipefail
+"$CHECKER" csv "$COMPAT" | sed '/goii\.cc\/mn/d' || die "RealityChecker 执行失败"
 info "请结合上面的解析核对和检测报告选择候选；重定向后的最终域名需单独核对解析。"
