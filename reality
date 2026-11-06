@@ -3,7 +3,9 @@
 #
 # 用法:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/<repo>/main/reality)
-#   bash reality install | uninstall [--purge] | update | restart | status | show
+#   bash reality install | reconfig | uninstall [--purge] | update | restart | status | show
+#   二次运行: bash reality 进菜单可 卸载 / 改域名 / 改端口 / 换密钥;
+#   安装完自动输出 QuanX 行 + vless:// 链接 + 二维码 (终端打印 + PNG 文件)。
 #
 # 兼容: Debian 11/12/13, Ubuntu 20.04/22.04/24.04, Alpine Linux (OpenRC)
 # 服务端: Xray-core (默认最新版, 失败时回落到已验证的 v26.10.31)
@@ -47,6 +49,9 @@
 #   REALITY_HOST   客户端填的地址, 默认自动探测公网 IP, 也可填域名
 #   REALITY_UUID   指定 UUID, 不指定则随机生成
 #   XRAY_VERSION   指定 Xray 版本, 如 v26.10.31; 不指定则取 GitHub 最新版
+# 改配置用 bash reality reconfig (菜单 6), 非交互时可用:
+#   REALITY_SNI / REALITY_PORT 指定新值, REALITY_REGEN_KEYS=1 换密钥+shortId,
+#   REALITY_REGEN_UUID=1 同时换 UUID。
 #
 set -u
 export LC_ALL=C
@@ -56,6 +61,7 @@ CONFIG_DIR="/usr/local/etc/xray"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 CLIENT_FILE="/root/xray-reality-client.txt"
 [ -d /root ] || CLIENT_FILE="${HOME:-/tmp}/xray-reality-client.txt"
+CLIENT_PNG="${CLIENT_FILE%.txt}.png"
 SERVICE_NAME="xray"
 FALLBACK_VERSION="v26.10.31"
 DEFAULT_SNI="www.amazon.com"
@@ -241,6 +247,35 @@ detect_init() {
 
 install_deps() {
   info "安装依赖..."
+  # 依赖都已齐全时跳过包管理器: 重装/改配置不必再跑一遍 apt/apk,
+  # 也避免系统包状态异常 (如有损坏的包) 时把本来能跑的改配置挡住
+  local need_install=0 c
+  for c in curl wget unzip openssl jq; do
+    command -v "$c" >/dev/null 2>&1 || need_install=1
+  done
+  command -v ss >/dev/null 2>&1 || need_install=1
+  command -v pgrep >/dev/null 2>&1 || need_install=1
+  [ -f /etc/ssl/certs/ca-certificates.crt ] || need_install=1
+  [ "$OS_ID" = "alpine" ] && { command -v rc-service >/dev/null 2>&1 || need_install=1; }
+  if [ "$need_install" = "0" ]; then
+    info "依赖已齐全, 跳过包管理器安装"
+  else
+    _install_deps_pkg
+  fi
+  # qrencode 只做二维码, 单独尽力装, 装不上也不中断安装 (show 时会提示)
+  if ! command -v qrencode >/dev/null 2>&1; then
+    case "$OS_ID" in
+      debian|ubuntu)
+        apt-get install -y qrencode 2>/dev/null || warn "qrencode 安装失败, 本次没有二维码; 装好后跑 bash reality show 可补生成"
+        ;;
+      alpine)
+        apk add --no-cache qrencode 2>/dev/null || warn "qrencode 未装上, 本次没有二维码; 装好后跑 bash reality show 可补生成"
+        ;;
+    esac
+  fi
+}
+
+_install_deps_pkg() {
   case "$OS_ID" in
     debian|ubuntu)
       export DEBIAN_FRONTEND=noninteractive
@@ -436,6 +471,49 @@ try_bbr() {
 }
 
 # ---- 安装 / 输出 -----------------------------------------------------------
+write_config() { # $1=uuid $2=priv $3=shortid $4=port $5=sni ; 写配置并校验
+  local uuid="$1" priv="$2" shortid="$3" port="$4" sni="$5"
+  mkdir -p "$CONFIG_DIR"
+  [ -f "$CONFIG_FILE" ] && cp -a "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+  cat > "$CONFIG_FILE" <<EOF
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "port": ${port},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          { "id": "${uuid}", "flow": "xtls-rprx-vision" }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "target": "${sni}:443",
+          "xver": 0,
+          "serverNames": ["${sni}"],
+          "privateKey": "${priv}",
+          "shortIds": ["${shortid}"]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
+  ]
+}
+EOF
+  # 服务端 realitySettings 里没有 fingerprint 字段 (那是客户端的),
+  # 别往里加, Xray 会直接报错; 客户端指纹在下面的链接 / QuanX 行里体现.
+  "$XRAY_BIN" -test -config "$CONFIG_FILE" >/dev/null 2>&1 || \
+    die "Xray 配置校验失败, 配置已写到 $CONFIG_FILE, 请检查后重试"
+}
+
 do_install() {
   need_root "$@"
   # 环境变量给的值先验一遍, 不合规在装依赖前就停, 不浪费一次 apt/apk
@@ -489,45 +567,7 @@ do_install() {
     port="$new_port"
   fi
 
-  mkdir -p "$CONFIG_DIR"
-  [ -f "$CONFIG_FILE" ] && cp -a "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
-  cat > "$CONFIG_FILE" <<EOF
-{
-  "log": { "loglevel": "warning" },
-  "inbounds": [
-    {
-      "port": ${port},
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          { "id": "${uuid}", "flow": "xtls-rprx-vision" }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "target": "${sni}:443",
-          "xver": 0,
-          "serverNames": ["${sni}"],
-          "privateKey": "${priv}",
-          "shortIds": ["${shortid}"]
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    { "protocol": "freedom", "tag": "direct" },
-    { "protocol": "blackhole", "tag": "block" }
-  ]
-}
-EOF
-  # 服务端 realitySettings 里没有 fingerprint 字段 (那是客户端的),
-  # 别往里加, Xray 会直接报错; 客户端指纹在下面的链接 / QuanX 行里体现.
-  "$XRAY_BIN" -test -config "$CONFIG_FILE" >/dev/null 2>&1 || \
-    die "Xray 配置校验失败, 配置已写到 $CONFIG_FILE, 请检查后重试"
+  write_config "$uuid" "$priv" "$shortid" "$port" "$sni"
 
   install_service
   start_service
@@ -546,6 +586,17 @@ show_info() { # $1=uuid $2=pubkey $3=shortid $4=port $5=sni
   # QuanX 行: 按官方 sample.conf vless-tls-reality-vision-01 的写法,
   # obfs=over-tls + obfs-host=<SNI>, 不带 fast-open (Reality 下必须关, 见文件头注释)
   local qx="vless=${host}:${port}, method=none, password=${uuid}, obfs=over-tls, obfs-host=${sni}, reality-base64-pubkey=${pub}, reality-hex-shortid=${shortid}, vless-flow=xtls-rprx-vision, udp-relay=true, tag=${tag}"
+  # 二维码: vless:// 链接扫码即导入; 先生成 PNG, 再在终端打印一份
+  local qr_note=""
+  if command -v qrencode >/dev/null 2>&1; then
+    if qrencode -o "$CLIENT_PNG" -s 6 -m 2 "$link" 2>/dev/null; then
+      qr_note="二维码 PNG: $CLIENT_PNG (扫码即导入 vless://)"
+    else
+      qr_note="二维码: PNG 生成失败 (终端下方仍有二维码)"
+    fi
+  else
+    qr_note="二维码: 未生成 (未装 qrencode; 装好后跑 bash reality show 补生成)"
+  fi
   {
     printf '%s\n' "Xray VLESS + REALITY + Vision (QuanX)"
     printf '%s\n' "地址: ${host}:${port}  SNI/dest: ${sni}  指纹: chrome (服务端不填, 客户端用)"
@@ -559,10 +610,16 @@ show_info() { # $1=uuid $2=pubkey $3=shortid $4=port $5=sni
     printf '%s\n' "UUID: $uuid"
     printf '%s\n' "公钥 pbk: $pub"
     printf '%s\n' "shortId: $shortid"
+    printf '%s\n' "$qr_note"
     printf '%s\n' "私钥 (只存服务端, 别发给别人): 请看 $CONFIG_FILE"
   } | tee "$CLIENT_FILE"
+  if command -v qrencode >/dev/null 2>&1; then
+    printf '%s\n' "--- 二维码 (扫 vless:// 链接, 手机客户端扫码导入) ---"
+    qrencode -t ANSIUTF8 "$link" 2>/dev/null || warn "终端二维码打印失败, 用上面保存的 PNG"
+  fi
   printf '\n'
   info "客户端配置已保存到 $CLIENT_FILE"
+  [ -f "$CLIENT_PNG" ] && info "二维码已保存到 $CLIENT_PNG"
   info "QuanX 要求 1.5.5+ 才支持 VLESS Reality + Vision, 低版本请先升级 QuanX"
   warn "私钥在 $CONFIG_FILE 里, 别把配置文件 / 客户端文件发到公开地方"
 }
@@ -576,6 +633,70 @@ do_show() {
   pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | grep -i 'public' | head -1 | sed -E 's/.*:[[:space:]]*//;s/[[:space:]]//g')"
   [ -n "$uuid" ] && [ -n "$pub" ] && [ -n "$shortid" ] || die "配置不完整, 请重装"
   show_info "$uuid" "$pub" "$shortid" "$port" "$sni"
+}
+
+do_reconfig() {
+  need_root "$@"
+  [ -f "$CONFIG_FILE" ] || die "还没安装, 配置 $CONFIG_FILE 不存在, 先跑 bash reality install"
+  [ -n "${REALITY_SNI:-}" ] && validate_sni "$REALITY_SNI"
+  [ -n "${REALITY_PORT:-}" ] && validate_port "$REALITY_PORT"
+  detect_os; install_deps; detect_init
+  [ -x "$XRAY_BIN" ] || download_xray
+
+  local old_port old_sni old_uuid old_priv old_shortid
+  old_port="$(existing_value port)"; old_sni="$(existing_value sni)"
+  old_uuid="$(existing_value uuid)"; old_priv="$(existing_value priv)"
+  old_shortid="$(existing_value shortid)"
+  [ -n "$old_uuid" ] && [ -n "$old_priv" ] || die "配置不完整, 请删配置重装"
+
+  local new_sni="${REALITY_SNI:-}" new_port="${REALITY_PORT:-}" ans=""
+  local regen_keys="${REALITY_REGEN_KEYS:-0}" regen_uuid="${REALITY_REGEN_UUID:-0}"
+  if [ -t 0 ]; then
+    printf '%s\n' "当前配置: 域名 $old_sni  端口 $old_port  UUID $old_uuid"
+    printf '新伪装域名 (回车保持 %s): ' "$old_sni"; read -r ans; [ -n "$ans" ] && new_sni="$ans"
+    printf '新端口 (回车保持 %s, 别用 CF 反代端口): ' "$old_port"; read -r ans; [ -n "$ans" ] && new_port="$ans"
+    printf '重新生成密钥 (新私钥/公钥 + 新 shortId)? [y/N]: '; read -r ans
+    case "$ans" in y|Y|yes|YES) regen_keys=1 ;; esac
+    if [ "$regen_keys" = "1" ]; then
+      printf '同时换 UUID? [y/N]: '; read -r ans
+      case "$ans" in y|Y|yes|YES) regen_uuid=1 ;; esac
+    fi
+  elif [ -z "$new_sni" ] && [ -z "$new_port" ] && [ "$regen_keys" != "1" ] && [ "$regen_uuid" != "1" ]; then
+    die "非交互下改配置请给环境变量: REALITY_SNI=新域名 / REALITY_PORT=新端口 / REALITY_REGEN_KEYS=1 (换密钥) / REALITY_REGEN_UUID=1 (换 UUID)"
+  fi
+  [ -n "$new_sni" ] || new_sni="$old_sni"
+  [ -n "$new_port" ] || new_port="$old_port"
+  validate_port "$new_port"; validate_sni "$new_sni"
+  if [ "$new_port" != "$old_port" ] && port_in_use "$new_port" && ! port_owner_is_xray "$new_port"; then
+    die "端口 $new_port 已被占用, 请换一个未占用的端口"
+  fi
+
+  local uuid="$old_uuid" priv="$old_priv" shortid="$old_shortid" pub=""
+  if [ "$regen_keys" = "1" ]; then
+    local kp; kp="$(gen_keypair)"
+    priv="$(printf '%s' "$kp" | sed -n '1p')"
+    pub="$(printf '%s' "$kp" | sed -n '2p')"
+    shortid="$(openssl rand -hex 8 2>/dev/null || head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    info "已重新生成密钥与 shortId"
+  fi
+  if [ "$regen_uuid" = "1" ]; then uuid="$(gen_uuid)"; info "已重新生成 UUID"; fi
+  if [ -z "$pub" ]; then
+    pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | grep -i 'public' | head -1 | sed -E 's/.*:[[:space:]]*//;s/[[:space:]]//g')"
+    [ -n "$pub" ] || die "私钥无法反推公钥, 请检查配置"
+  fi
+
+  write_config "$uuid" "$priv" "$shortid" "$new_port" "$new_sni"
+  stop_service
+  start_service
+  service_active || die "改配置后 Xray 未运行, 查日志: systemd 用 journalctl -u xray -n 50; OpenRC 用 rc-service xray status"
+  if [ "$new_port" != "$old_port" ]; then
+    open_firewall "$new_port"
+    warn "旧端口 $old_port 的防火墙/安全组规则仍在, 不用了请手动关掉"
+  fi
+  try_bbr
+  info "配置已改: 域名 $old_sni -> $new_sni, 端口 $old_port -> $new_port"
+  [ "$regen_keys" = "1" ] && warn "密钥已换, 旧的 QuanX 行 / 链接 / 二维码全部作废, 请用下面新的"
+  show_info "$uuid" "$pub" "$shortid" "$new_port" "$new_sni"
 }
 
 do_uninstall() {
@@ -595,8 +716,8 @@ do_uninstall() {
   esac
   rm -f "$XRAY_BIN"
   if [ "${2:-}" = "--purge" ]; then
-    rm -rf "$CONFIG_DIR" "$CLIENT_FILE"
-    info "已彻底卸载 (含配置与客户端文件)"
+    rm -rf "$CONFIG_DIR" "$CLIENT_FILE" "$CLIENT_PNG"
+    info "已彻底卸载 (含配置、客户端文件与二维码)"
   else
     info "已卸载程序, 配置保留在 $CONFIG_FILE, 重装会继续用它"
   fi
@@ -631,8 +752,9 @@ menu() {
   printf '%s\n' "  3) 更新 Xray 到最新版"
   printf '%s\n' "  4) 重启服务"
   printf '%s\n' "  5) 卸载 (保留配置)"
+  printf '%s\n' "  6) 更改配置 (域名 / 端口 / 密钥, 旧配置作废)"
   printf '%s\n' "  0) 退出"
-  printf '请选择 [1-5/0]: '
+  printf '请选择 [1-6/0]: '
   read -r choice
   case "$choice" in
     1) do_install "$@" ;;
@@ -640,6 +762,7 @@ menu() {
     3) do_update "$@" ;;
     4) need_root "$@"; detect_init; start_service; service_active && info "服务已重启" || die "重启失败" ;;
     5) do_uninstall "$@" ;;
+    6) do_reconfig "$@" ;;
     0) exit 0 ;;
     *) die "无效选择: $choice" ;;
   esac
@@ -648,14 +771,17 @@ menu() {
 case "${1:-}" in
   install|"") [ -n "${1:-}" ] || { [ -t 0 ] && menu "$@" || do_install "$@"; exit 0; }; do_install "$@" ;;
   show|info) do_show ;;
+  reconfig|change) do_reconfig "$@" ;;
   update|upgrade) do_update "$@" ;;
   restart) need_root "$@"; detect_init; start_service; service_active && info "服务已重启" || die "重启失败" ;;
   status) do_status ;;
   uninstall|remove) do_uninstall "$@" ;;
   -h|--help|help)
-    printf '%s\n' "用法: bash reality [install|show|update|restart|status|uninstall [--purge]]"
+    printf '%s\n' "用法: bash reality [install|reconfig|show|update|restart|status|uninstall [--purge]]"
     printf '%s\n' "无参数时: 有终端进菜单, 无终端 (管道/重定向) 直接安装"
+    printf '%s\n' "reconfig: 改伪装域名 / 端口 / 重新生成密钥, 旧的客户端配置作废"
     printf '%s\n' "环境变量: REALITY_PORT REALITY_SNI REALITY_TAG REALITY_HOST REALITY_UUID XRAY_VERSION"
+    printf '%s\n' "改配置非交互: REALITY_SNI=.. REALITY_PORT=.. REALITY_REGEN_KEYS=1 REALITY_REGEN_UUID=1 bash reality reconfig"
     ;;
   *) die "未知命令: $1, 用 bash reality --help 看用法" ;;
 esac
