@@ -10,6 +10,22 @@
 - root 或可 sudo 的用户
 - QuanX **1.5.5+** 才支持 VLESS Reality + Vision，低版本请先升级 QuanX
 
+## 扫描并自动安装（Debian / Ubuntu）
+
+在新 VPS 的 root 终端运行：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/auto-reality.sh)
+```
+
+脚本会扫描本机公网 IPv4 所在 `/23` 的 443 端口，检测候选域名，并将合格结果中握手时间最低的域名作为 SNI/dest 安装 Xray REALITY。已有 Xray 程序、默认配置或服务时，脚本会停止以免覆盖；没有合格结果时也会停止，不使用默认域名。安装会安装依赖、配置 Xray 和服务，并尝试调整防火墙和 BBR。要求 root、curl；缺少 python3 时使用 apt 安装。
+
+只扫描有权扫描的网段，扫描器上游建议在本地扫描，VPS 扫描可能被标记。推荐只是基于检测时的数据，无法保证同 ASN、稳定或避免封锁。已有扫描结果可跳过扫描：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/auto-reality.sh) --csv file.csv
+```
+
 ## 一键安装
 
 ```bash

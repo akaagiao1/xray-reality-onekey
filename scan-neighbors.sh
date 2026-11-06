@@ -44,11 +44,13 @@ DRY_RUN=0
 TARGET=""
 OUT="file.csv"
 EXISTING_CSV=""
+RECOMMEND_FILE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --dry-run) DRY_RUN=1 ;;
     --csv) shift; [ "$#" -gt 0 ] || die "--csv 需要文件路径"; EXISTING_CSV="$1" ;;
+    --recommend-file) shift; [ "$#" -gt 0 ] || die "--recommend-file 需要文件路径"; RECOMMEND_FILE="$1" ;;
     --*) die "未知选项: $1" ;;
     *) if [ -z "$TARGET" ]; then TARGET="$1"; else OUT="$1"; fi ;;
   esac
@@ -225,7 +227,7 @@ set -o pipefail
 (cd "$CHECKER_WORK" && "$CHECKER" csv "$COMPAT") | sed '/goii\.cc\/mn/d' | tee "$REPORT" || die "RealityChecker 执行失败"
 
 # 仅推荐最终域名与扫描证书域名相同，且当前仍解析到对应扫描 IP 的结果。
-python3 - "$COMPAT" "$REPORT" <<'PYCODE' || die "推荐结果生成失败"
+python3 - "$COMPAT" "$REPORT" "$RECOMMEND_FILE" <<'PYCODE' || die "推荐结果生成失败"
 import csv
 import re
 import socket
@@ -261,11 +263,17 @@ with open(sys.argv[2], encoding="utf-8", errors="replace") as f:
         if matched:
             candidates.append((int(ms.group(1)), name, matched[0], int(days.group(1))))
 
+candidates = sorted(set(candidates))
+if sys.argv[3]:
+    with open(sys.argv[3], "w", encoding="utf-8") as result:
+        if candidates:
+            result.write(candidates[0][1] + "\n")
+
 print("\n推荐结果（按握手延迟排序，最多 3 个）：")
 if not candidates:
     print("本次没有符合条件的推荐域名；请查看上方报告或更换获授权的扫描范围。")
 else:
-    for i, (ms, name, ip, days) in enumerate(sorted(set(candidates))[:3], 1):
+    for i, (ms, name, ip, days) in enumerate(candidates[:3], 1):
         print(f"推荐 {i}: {name}  邻居 IP: {ip}  握手: {ms}ms  证书剩余: {days}天")
 print("筛选依据：检测通过、状态 200、无明显 CDN、非热门、证书至少 14 天，且当前解析包含扫描 IP。")
 print("DNS 可能变化；检测结果不能证明同 ASN 或保证可用。请在实际节点配置后测试。")
