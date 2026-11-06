@@ -96,7 +96,8 @@ if [ -z "$EXISTING_CSV" ]; then
   esac
 fi
 
-VENDOR_URL="https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/vendor"
+VENDOR_URL="https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/8d53364/vendor"
+VENDOR_BACKUP="https://github.com/akaagiao1/xray-reality-onekey/raw/8d53364/vendor"
 SCANNER_URL="$VENDOR_URL/RealiTLScanner-linux-${ARCH}"
 CHECKER_URL="$VENDOR_URL/reality-checker-linux-${ARCH}.zip"
 case "$ARCH" in
@@ -125,21 +126,41 @@ h = hashlib.sha256()
 with open(sys.argv[1], "rb") as f:
     for chunk in iter(lambda: f.read(1024 * 1024), b""):
         h.update(chunk)
-sys.exit(0 if h.hexdigest() == sys.argv[2] else 1)
+actual = h.hexdigest()
+if actual != sys.argv[2]:
+    print(f"实际 SHA-256: {actual}，预期: {sys.argv[2]}", file=sys.stderr)
+    sys.exit(1)
 PYHASH
+}
+download_verified() {
+  local name="$1" target="$2" expected="$3" base attempt
+  for base in "$VENDOR_URL" "$VENDOR_BACKUP"; do
+    for attempt in 1 2; do
+      rm -f -- "$target.tmp"
+      if curl -fsSL --retry 2 --connect-timeout 15 --max-time 120 -o "$target.tmp" "$base/$name"; then
+        if verify_sha256 "$target.tmp" "$expected"; then
+          mv -f -- "$target.tmp" "$target" || die "无法保存文件: $target"
+          return 0
+        fi
+        warn "下载内容校验失败（${base}/${name}，第 ${attempt} 次），将重试。"
+      else
+        warn "下载失败（${base}/${name}，第 ${attempt} 次），将重试。"
+      fi
+    done
+  done
+  rm -f -- "$target.tmp"
+  die "下载失败或 SHA-256 不匹配: $name，请检查 VPS 到 GitHub 的网络。"
 }
 if [ -z "$EXISTING_CSV" ] && [ ! -x "$SCANNER" ]; then
   info "下载 RealiTLScanner $SCANNER_VER ..."
-  curl -fsSL --max-time 120 -o "$SCANNER.tmp" "$SCANNER_URL" || die "RealiTLScanner 下载失败: $SCANNER_URL"
-  verify_sha256 "$SCANNER.tmp" "$SCANNER_HASH" || { rm -f "$SCANNER.tmp"; die "扫描器 SHA-256 校验失败"; }
-  mv "$SCANNER.tmp" "$SCANNER" && chmod +x "$SCANNER"
+  download_verified "RealiTLScanner-linux-${ARCH}" "$SCANNER" "$SCANNER_HASH"
+  chmod +x "$SCANNER"
 elif [ -z "$EXISTING_CSV" ]; then
   info "扫描器已有: $SCANNER"
 fi
 if [ ! -x "$CHECKER" ]; then
   info "下载 RealityChecker $CHECKER_VER ..."
-  curl -fsSL --max-time 120 -o "$TOOLS_DIR/reality-checker.zip" "$CHECKER_URL" || die "RealityChecker 下载失败: $CHECKER_URL"
-  verify_sha256 "$TOOLS_DIR/reality-checker.zip" "$CHECKER_HASH" || { rm -f "$TOOLS_DIR/reality-checker.zip"; die "检测器 SHA-256 校验失败"; }
+  download_verified "reality-checker-linux-${ARCH}.zip" "$TOOLS_DIR/reality-checker.zip" "$CHECKER_HASH"
   if command -v unzip >/dev/null 2>&1; then
     unzip -o -q "$TOOLS_DIR/reality-checker.zip" -d "$TOOLS_DIR" || die "解压 RealityChecker 失败"
   else
@@ -211,9 +232,7 @@ while read -r data_name data_hash; do
   data_path="$DATA_CACHE/$data_name"
   if [ ! -f "$data_path" ] || ! verify_sha256 "$data_path" "$data_hash"; then
     info "下载检测数据: $data_name"
-    curl -fsSL --max-time 120 -o "$data_path.tmp" "$VENDOR_URL/data/$data_name" || die "检测数据下载失败: $data_name"
-    verify_sha256 "$data_path.tmp" "$data_hash" || { rm -f "$data_path.tmp"; die "检测数据 SHA-256 校验失败: $data_name"; }
-    mv "$data_path.tmp" "$data_path" || die "无法保存检测数据"
+    download_verified "data/$data_name" "$data_path" "$data_hash"
   fi
   cp "$data_path" "$CHECKER_WORK/data/$data_name" || die "无法复制检测数据"
 done <<'DATAFILES'
