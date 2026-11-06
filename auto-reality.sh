@@ -27,7 +27,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/auto-reality.XXXXXXXX") || error '无法创建临时目录。'
 trap 'rm -rf -- "$workdir"' EXIT
-base='https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/b15afa3'
+base='https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/e58b3d0'
 printf '[1/3] 下载扫描脚本...\n'
 curl -fsSL --retry 3 --connect-timeout 15 -o "$workdir/scan-neighbors.sh" "$base/scan-neighbors.sh" || error '扫描脚本下载失败。'
 printf '[2/3] 扫描和筛选候选域名...\n'
