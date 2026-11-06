@@ -4,6 +4,7 @@
 # 用法:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/<repo>/main/reality)
 #   bash reality install | reconfig | uninstall [--purge] | update | restart | status | show
+#   安装时有终端会问伪装域名, 回车默认 www.amazon.com, 也可自己填 (如 heiheiai.shop);
 #   二次运行: bash reality 进菜单可 卸载 / 改域名 / 改端口 / 换密钥;
 #   安装完自动输出 QuanX 行 + vless:// 链接 + 二维码 (终端打印 + PNG 文件)。
 #
@@ -471,8 +472,24 @@ try_bbr() {
 }
 
 # ---- 安装 / 输出 -----------------------------------------------------------
-write_config() { # $1=uuid $2=priv $3=shortid $4=port $5=sni ; 写配置并校验
-  local uuid="$1" priv="$2" shortid="$3" port="$4" sni="$5"
+prompt_sni() { # $1=当前值(已有配置或默认) ; 交互时让用户自选伪装域名, 输出选定的 sni
+  # 提示走 stderr (结果走 stdout, 调用处用 $() 接), 否则提示词会混进返回值
+  local cur="$1" ans="" tries=0
+  while [ "$tries" -lt 3 ]; do
+    printf '伪装域名 Reality dest/SNI (回车保持 %s, 自己选如 heiheiai.shop): ' "$cur" >&2
+    read -r ans || ans=""
+    ans="$(printf '%s' "$ans" | tr -d ' \t\r\n')"
+    [ -z "$ans" ] && { printf '%s' "$cur"; return 0; }
+    # 子 shell 里校验: 不合规 (CF 站/解析到 CF IP) 只算这次输入作废, 不直接退出
+    if (validate_sni "$ans" >/dev/null 2>&1); then printf '%s' "$ans"; return 0; fi
+    tries=$((tries+1))
+    printf '%s\n' "[WARN] 域名 $ans 不可用 (可能是 CF 站或解析到 CF IP), 请换一个 (还剩 $((3-tries)) 次)" >&2
+  done
+  printf '%s\n' "[ERROR] 连续 3 次输入的域名都不可用, 已停止; 也可以用 REALITY_SNI=域名 直接指定后重装" >&2
+  return 1
+}
+
+write_config() { # $1=uuid $2=priv $3=shortid $4=port $5=sni ; 写配置并校验  local uuid="$1" priv="$2" shortid="$3" port="$4" sni="$5"
   mkdir -p "$CONFIG_DIR"
   [ -f "$CONFIG_FILE" ] && cp -a "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
   cat > "$CONFIG_FILE" <<EOF
@@ -532,6 +549,11 @@ do_install() {
   [ -n "$port" ] || port="$DEFAULT_PORT"
   local sni="${REALITY_SNI:-$(existing_value sni)}"
   [ -n "$sni" ] || sni="$DEFAULT_SNI"
+  if [ -t 0 ] && [ -z "${REALITY_SNI:-}" ]; then
+    # 交互安装: 让用户自己选伪装域名 (用户要求, 2026-11-06), 回车保持当前值;
+    # 环境变量 REALITY_SNI 指定了就跳过提问, 非交互 (管道) 也不问
+    sni="$(prompt_sni "$sni")" || die "选择伪装域名失败, 也可以用 REALITY_SNI=域名 直接指定后重装"
+  fi
   # CF 校验在下载 / 写配置之前做, 不合规直接停, 不浪费一次下载
   validate_port "$port"
   validate_sni "$sni"
@@ -747,7 +769,7 @@ do_status() {
 
 menu() {
   printf '%s\n' "Xray VLESS + REALITY (主攻 QuanX) 一键脚本"
-  printf '%s\n' "  1) 安装 / 重装 (保留已有 UUID/密钥/端口)"
+  printf '%s\n' "  1) 安装 / 重装 (会问伪装域名, 回车保持当前)"
   printf '%s\n' "  2) 查看客户端配置 (QuanX 行 + vless://)"
   printf '%s\n' "  3) 更新 Xray 到最新版"
   printf '%s\n' "  4) 重启服务"
@@ -780,6 +802,7 @@ case "${1:-}" in
     printf '%s\n' "用法: bash reality [install|reconfig|show|update|restart|status|uninstall [--purge]]"
     printf '%s\n' "无参数时: 有终端进菜单, 无终端 (管道/重定向) 直接安装"
     printf '%s\n' "reconfig: 改伪装域名 / 端口 / 重新生成密钥, 旧的客户端配置作废"
+    printf '%s\n' "安装时有终端会提示自选伪装域名, 回车保持默认/当前; 非交互用 REALITY_SNI=域名指定"
     printf '%s\n' "环境变量: REALITY_PORT REALITY_SNI REALITY_TAG REALITY_HOST REALITY_UUID XRAY_VERSION"
     printf '%s\n' "改配置非交互: REALITY_SNI=.. REALITY_PORT=.. REALITY_REGEN_KEYS=1 REALITY_REGEN_UUID=1 bash reality reconfig"
     ;;

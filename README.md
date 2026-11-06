@@ -18,6 +18,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 
 无终端（管道）时直接安装；有终端时进菜单：安装 / 查看配置 / 更新 / 重启 / 卸载 / 更改配置（域名、端口、密钥）。
 
+安装时会问伪装域名（Reality dest/SNI）：直接回车用默认 `www.amazon.com`，也可以自己填一个，比如刚筛出来的冷门域名 `heiheiai.shop`。填了 CF 的站、或解析到 CF IP 的站会被拒绝并重问（最多 3 次）；非交互安装（管道）不提问，用环境变量 `REALITY_SNI` 指定，不指定就用默认。
+
 也可以直接指定操作：
 
 ```bash
