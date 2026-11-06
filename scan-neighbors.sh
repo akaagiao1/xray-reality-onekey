@@ -139,7 +139,8 @@ fi
 
 # RealityChecker v2.2.3 使用第 3 列；v0.2.3 扫描器的域名在第 9 列。
 COMPAT="$(mktemp "${TMPDIR:-/tmp}/reality-compatible.XXXXXXXX")" || die "无法创建临时文件"
-trap 'rm -f -- "$COMPAT"' EXIT
+REPORT="$(mktemp "${TMPDIR:-/tmp}/reality-report.XXXXXXXX")" || { rm -f -- "$COMPAT"; die "无法创建临时文件"; }
+trap 'rm -f -- "$COMPAT" "$REPORT"' EXIT
 info "转换 CSV 并核对域名当前解析（仅供参考）..."
 python3 - "$OUT" "$COMPAT" <<'PYCODE' || die "CSV 转换失败，请检查文件格式"
 import csv
@@ -184,5 +185,51 @@ PYCODE
 
 info "开始用 RealityChecker 检测证书域名（包括未匹配的域名）..."
 set -o pipefail
-"$CHECKER" csv "$COMPAT" | sed '/goii\.cc\/mn/d' || die "RealityChecker 执行失败"
-info "请结合上面的解析核对和检测报告选择候选；重定向后的最终域名需单独核对解析。"
+"$CHECKER" csv "$COMPAT" | sed '/goii\.cc\/mn/d' | tee "$REPORT" || die "RealityChecker 执行失败"
+
+# 仅推荐最终域名与扫描证书域名相同，且当前仍解析到对应扫描 IP 的结果。
+python3 - "$COMPAT" "$REPORT" <<'PYCODE' || die "推荐结果生成失败"
+import csv
+import re
+import socket
+import sys
+
+scanned = {}
+with open(sys.argv[1], encoding="utf-8", newline="") as f:
+    for row in csv.DictReader(f):
+        domain = (row.get("CERT_DOMAIN") or "").strip().lower().rstrip(".")
+        ip = (row.get("IP") or "").strip()
+        if domain and "*" not in domain and ip:
+            scanned.setdefault(domain, set()).add(ip)
+
+ansi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+candidates = []
+with open(sys.argv[2], encoding="utf-8", errors="replace") as f:
+    for line in f:
+        parts = [p.strip() for p in ansi.sub("", line).strip().strip("|").split("|")]
+        if len(parts) != 8:
+            continue
+        name, basic, latency, cert, cdn, hot, stars, status = parts
+        key = name.lower().rstrip(".")
+        ms = re.fullmatch(r"(\d+)ms", latency)
+        days = re.fullmatch(r"(\d+)天", cert)
+        if not (key in scanned and basic == "✓" and ms and days and int(days.group(1)) >= 14
+                and cdn == "无" and hot == "-" and status == "200"):
+            continue
+        try:
+            resolved = {r[4][0] for r in socket.getaddrinfo(key, None, socket.AF_INET, socket.SOCK_STREAM)}
+        except socket.gaierror:
+            continue
+        matched = sorted(scanned[key] & resolved)
+        if matched:
+            candidates.append((int(ms.group(1)), name, matched[0], int(days.group(1))))
+
+print("\n推荐结果（按握手延迟排序，最多 3 个）：")
+if not candidates:
+    print("本次没有符合条件的推荐域名；请查看上方报告或更换获授权的扫描范围。")
+else:
+    for i, (ms, name, ip, days) in enumerate(sorted(set(candidates))[:3], 1):
+        print(f"推荐 {i}: {name}  邻居 IP: {ip}  握手: {ms}ms  证书剩余: {days}天")
+print("筛选依据：检测通过、状态 200、无明显 CDN、非热门、证书至少 14 天，且当前解析包含扫描 IP。")
+print("DNS 可能变化；检测结果不能证明同 ASN 或保证可用。请在实际节点配置后测试。")
+PYCODE
