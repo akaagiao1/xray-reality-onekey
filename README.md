@@ -74,7 +74,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/scan-neighbors.sh)
 ```
 
-它会：自动探测本机公网 IP → 扫它所在的 /24（`RealiTLScanner`，线程 100、超时 5 秒，结果写 `file.csv`）→ 再用 `RealityChecker` 过滤，只留 TLS 1.3 + X25519 + h2 + SNI 匹配、无 CDN、非热门的。两个工具没有就自动从官方 release 下载（已有就跳过）。
+它会自动探测公网 IP，扫描所在 `/24`（443 端口，100 线程，5 秒超时），把结果写入 `file.csv`，核对证书域名当前解析是否包含扫描到的 IP，再交给 RealityChecker 检测。支持新版扫描器的 CSV 格式；需要 `curl` 和 `python3`，工具不存在时从上游 release 下载。RealityChecker 的检测结果包括不匹配的域名，需结合解析结果判断。
 
 也可以指定：
 
@@ -82,11 +82,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 # 指定 IP（自动换成它所在的 /24）或网段、输出文件名
 bash scan-neighbors.sh 154.9.236.158
 bash scan-neighbors.sh 154.9.236.0/24 file2.csv
+# 使用已有结果重新检测，不重新扫描
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/scan-neighbors.sh) --csv file.csv
 # 只看要执行的命令，不真扫
 bash scan-neighbors.sh --dry-run 154.9.236.158
 ```
 
-注意：官方建议扫描器尽量在本地跑，VPS 上扫有被标记的风险，只扫一个 /24 一般问题不大。裸 IP 会自动换成 /24（单个 IP 会触发扫描器的 infinity 模式一直扫不停）。扫出来挑个冷门的，用 `REALITY_SNI=域名` 装节点，或装完 `bash reality reconfig` 改过去。
+注意：上游建议在本地扫描，VPS 上扫描可能被标记；仅扫描获授权的目标。裸 IP 会自动换成 /24。DNS 匹配只是当前时刻的参考，并不证明同 ASN 或保证连接稳定；如果检测器显示最终域名与扫描域名不同，需单独核对最终域名的解析。再次扫描可能覆盖 `file.csv`。
 
 ## Quantumult X 配置（重点）
 

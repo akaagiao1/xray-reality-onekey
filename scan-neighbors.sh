@@ -9,7 +9,7 @@
 #   bash scan-neighbors.sh --dry-run [IP或网段]      # 只打印要执行的命令, 不真扫
 #
 # 输出: 扫描结果写进 file.csv (或你指定的文件), RealityChecker 的过滤结果打印到终端
-# 注意: 官方建议 RealiTLScanner 尽量在本地跑, VPS 上扫有被标记的风险; 只扫一个 /24 一般问题不大
+# 注意: 官方建议 RealiTLScanner 尽量在本地跑, VPS 上扫有被标记的风险; 在 VPS 上扫描仍有风险
 set -u
 export LC_ALL=C
 
@@ -27,6 +27,7 @@ usage() {
   printf '%s\n' "  不给 IP: 自动探测本机公网 IP, 扫它所在的 /24"
   printf '%s\n' "  只给 IP: 如 154.9.236.158, 自动换成 154.9.236.0/24 再扫"
   printf '%s\n' "  给网段: 如 154.9.236.0/24, 直接扫这个网段"
+  printf '%s\n' "  --csv 文件: 使用已有扫描结果，跳过扫描"
   printf '%s\n' "  --dry-run: 只打印要执行的命令, 不下载不扫描"
 }
 
@@ -42,13 +43,22 @@ CHECKER="$TOOLS_DIR/reality-checker"
 DRY_RUN=0
 TARGET=""
 OUT="file.csv"
-for arg in "$@"; do
-  case "$arg" in
+EXISTING_CSV=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     -h|--help) usage; exit 0 ;;
     --dry-run) DRY_RUN=1 ;;
-    *) if [ -z "$TARGET" ]; then TARGET="$arg"; else OUT="$arg"; fi ;;
+    --csv) shift; [ "$#" -gt 0 ] || die "--csv 需要文件路径"; EXISTING_CSV="$1" ;;
+    --*) die "未知选项: $1" ;;
+    *) if [ -z "$TARGET" ]; then TARGET="$1"; else OUT="$1"; fi ;;
   esac
+  shift
 done
+if [ -n "$EXISTING_CSV" ]; then
+  [ -z "$TARGET" ] || die "--csv 不能与扫描目标同时使用"
+  [ -f "$EXISTING_CSV" ] && [ -r "$EXISTING_CSV" ] || die "CSV 不存在或不可读取: $EXISTING_CSV"
+  OUT="$EXISTING_CSV"
+fi
 
 [ "$(uname -s)" = "Linux" ] || die "这个脚本只支持 Linux VPS; Mac 请装 Go 后自行编译 RealiTLScanner / RealityChecker"
 ARCH_RAW="$(uname -m)"
@@ -67,20 +77,24 @@ public_ip() {
 }
 
 # ---- 目标网段: 裸 IP 一律换成它所在的 /24 (单个 IP 会触发扫描器的 infinity 模式, 一直扫不停) ----
-if [ -z "$TARGET" ]; then
+if [ -z "$TARGET" ] && [ -z "$EXISTING_CSV" ]; then
   TARGET="$(public_ip)"
   [ -n "$TARGET" ] || die "探测不到本机公网 IP, 请手动指定: bash $0 <VPS IP 或网段>"
 fi
-case "$TARGET" in
-  */*) CIDR="$TARGET" ;;
-  *.*.*.*) CIDR="${TARGET%.*}.0/24" ;;
-  *) die "IP/网段无效: $TARGET" ;;
-esac
+CIDR=""
+if [ -z "$EXISTING_CSV" ]; then
+  case "$TARGET" in
+    */*) CIDR="$TARGET" ;;
+    *.*.*.*) CIDR="${TARGET%.*}.0/24" ;;
+    *) die "IP/网段无效: $TARGET" ;;
+  esac
+fi
 
 SCANNER_URL="https://github.com/XTLS/RealiTLScanner/releases/download/${SCANNER_VER}/RealiTLScanner-linux-${ARCH}"
 CHECKER_URL="https://github.com/V2RaySSR/RealityChecker/releases/download/${CHECKER_VER}/reality-checker-linux-${ARCH}.zip"
 
 if [ "$DRY_RUN" = "1" ]; then
+  [ -z "$EXISTING_CSV" ] || { info "[dry-run] 使用已有 CSV: $OUT"; exit 0; }
   info "[dry-run] 目标网段: $CIDR"
   info "[dry-run] 扫描器: $SCANNER_URL (已有则跳过下载)"
   info "[dry-run] 检测器: $CHECKER_URL (已有则跳过下载)"
@@ -89,12 +103,14 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
+command -v python3 >/dev/null 2>&1 || die "需要 python3，请先安装: apt install -y python3"
+
 # ---- 工具: 没有就下载 (官方 release, 不是来路不明的脚本) ----
-if [ ! -x "$SCANNER" ]; then
+if [ -z "$EXISTING_CSV" ] && [ ! -x "$SCANNER" ]; then
   info "下载 RealiTLScanner $SCANNER_VER ..."
   curl -fsSL --max-time 120 -o "$SCANNER.tmp" "$SCANNER_URL" || die "RealiTLScanner 下载失败: $SCANNER_URL"
   mv "$SCANNER.tmp" "$SCANNER" && chmod +x "$SCANNER"
-else
+elif [ -z "$EXISTING_CSV" ]; then
   info "扫描器已有: $SCANNER"
 fi
 if [ ! -x "$CHECKER" ]; then
@@ -110,15 +126,58 @@ else
   info "检测器已有: $CHECKER"
 fi
 
-# ---- 第一步: 扫邻居 ----
-info "开始扫描 $CIDR (线程 $THREADS, 超时 ${TIMEOUT}s, 输出 $OUT)..."
-"$SCANNER" -addr "$CIDR" -port 443 -thread "$THREADS" -timeout "$TIMEOUT" -out "$OUT" || warn "扫描器退出码非 0, 先看 $OUT 是否有内容"
-[ -f "$OUT" ] || die "扫描没生成 $OUT, 换个网段或检查网络再试"
-ROWS=$(( $(wc -l < "$OUT") - 1 ))
-[ "$ROWS" -gt 0 ] || die "扫描结果 0 行 ($OUT 只有表头), 这个网段上没扫到东西, 换个网段再试"
-info "扫描完成: $OUT 共 $ROWS 行"
+# ---- 第一步: 扫邻居或使用已有结果 ----
+if [ -z "$EXISTING_CSV" ]; then
+  info "开始扫描 $CIDR (线程 $THREADS, 超时 ${TIMEOUT}s, 输出 $OUT)..."
+  "$SCANNER" -addr "$CIDR" -port 443 -thread "$THREADS" -timeout "$TIMEOUT" -out "$OUT" || die "扫描器执行失败"
+fi
+[ -s "$OUT" ] || die "扫描结果不存在或为空: $OUT"
 
-# ---- 第二步: 过滤 ----
-info "开始用 RealityChecker 过滤 (只留 TLS 1.3 + X25519 + h2 + SNI 匹配、无 CDN、非热门的)..."
-"$CHECKER" csv "$OUT"
-info "上面通过的就是候选; 挑个冷门的用: REALITY_SNI=域名 bash reality install (或装完 bash reality reconfig 改过去)"
+# RealityChecker v2.2.3 使用第 3 列；v0.2.3 扫描器的域名在第 9 列。
+COMPAT="$(mktemp "${TMPDIR:-/tmp}/reality-compatible.XXXXXXXX")" || die "无法创建临时文件"
+trap 'rm -f -- "$COMPAT"' EXIT
+info "转换 CSV 并核对域名当前解析（仅供参考）..."
+python3 - "$OUT" "$COMPAT" <<'PYCODE' || die "CSV 转换失败，请检查文件格式"
+import csv
+import socket
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8-sig", newline="") as src:
+        reader = csv.DictReader(src)
+        required = {"IP", "ORIGIN", "CERT_DOMAIN"}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise ValueError("缺少 IP、ORIGIN 或 CERT_DOMAIN 列")
+        rows = list(reader)
+    if not rows:
+        raise ValueError("CSV 没有扫描记录")
+    with open(sys.argv[2], "w", encoding="utf-8", newline="") as dst:
+        writer = csv.writer(dst)
+        writer.writerow(["IP", "ORIGIN", "CERT_DOMAIN"])
+        for row in rows:
+            writer.writerow([row["IP"], row["ORIGIN"], row["CERT_DOMAIN"]])
+    seen = set()
+    for row in rows:
+        ip = (row["IP"] or "").strip()
+        name = (row["CERT_DOMAIN"] or "").strip()
+        if (name, ip) in seen:
+            continue
+        seen.add((name, ip))
+        if not name or "*" in name or "." not in name:
+            print(f"[跳过解析] {name or '(空域名)'}  扫描IP: {ip}")
+            continue
+        try:
+            resolved = sorted({r[4][0] for r in socket.getaddrinfo(name, None, socket.AF_INET, socket.SOCK_STREAM)})
+            status = "匹配" if ip in resolved else "不匹配"
+            print(f"[{status}] {name}  扫描IP: {ip}  当前IPv4: {', '.join(resolved) or '无'}")
+        except socket.gaierror:
+            print(f"[解析失败] {name}  扫描IP: {ip}")
+    print("说明：解析仅代表当前时刻；匹配不等于同 ASN，也不保证 REALITY 可用。")
+except (OSError, UnicodeError, csv.Error, ValueError) as exc:
+    print(f"CSV 错误: {exc}", file=sys.stderr)
+    sys.exit(1)
+PYCODE
+
+info "开始用 RealityChecker 检测证书域名（包括未匹配的域名）..."
+"$CHECKER" csv "$COMPAT" || die "RealityChecker 执行失败"
+info "请结合上面的解析核对和检测报告选择候选；重定向后的最终域名需单独核对解析。"
