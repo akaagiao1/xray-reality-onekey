@@ -66,6 +66,28 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 
 默认伪装站选 `www.amazon.com` 而不是更常见的 `www.apple.com` / `www.microsoft.com`，是因为实测 Xray 26.10.31 对后两者会警告“会增加服务器 IP 被 GFW 封的概率”，对 `www.amazon.com` 则不警告。想跟已有 sing-box 节点保持一致，可用 `REALITY_SNI=www.apple.com` 改回去，服务端与 QuanX 行的 SNI 会一起变。
 
+## 找邻居域名（一键扫）
+
+想找跟 VPS 同网段的冷门域名做 dest，不用手动装两个工具，跑这个就行（`scan-neighbors.sh`，也在本仓库）：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/scan-neighbors.sh)
+```
+
+它会：自动探测本机公网 IP → 扫它所在的 /24（`RealiTLScanner`，线程 100、超时 5 秒，结果写 `file.csv`）→ 再用 `RealityChecker` 过滤，只留 TLS 1.3 + X25519 + h2 + SNI 匹配、无 CDN、非热门的。两个工具没有就自动从官方 release 下载（已有就跳过）。
+
+也可以指定：
+
+```bash
+# 指定 IP（自动换成它所在的 /24）或网段、输出文件名
+bash scan-neighbors.sh 154.9.236.158
+bash scan-neighbors.sh 154.9.236.0/24 file2.csv
+# 只看要执行的命令，不真扫
+bash scan-neighbors.sh --dry-run 154.9.236.158
+```
+
+注意：官方建议扫描器尽量在本地跑，VPS 上扫有被标记的风险，只扫一个 /24 一般问题不大。裸 IP 会自动换成 /24（单个 IP 会触发扫描器的 infinity 模式一直扫不停）。扫出来挑个冷门的，用 `REALITY_SNI=域名` 装节点，或装完 `bash reality reconfig` 改过去。
+
 ## Quantumult X 配置（重点）
 
 安装完成后，**优先用这一行**，粘贴到 QuanX 配置的 `[server_local]`：
