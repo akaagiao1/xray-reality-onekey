@@ -74,7 +74,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/scan-neighbors.sh)
 ```
 
-它会自动探测公网 IP，扫描所在 `/23`（512 个地址，443 端口，100 线程，5 秒超时），把结果写入 `file.csv`，核对证书域名当前解析是否包含扫描到的 IP，再交给 RealityChecker 检测。支持新版扫描器的 CSV 格式；需要 `curl` 和 `python3`，工具不存在时从上游 release 下载。RealityChecker 的检测结果包括不匹配的域名，需结合解析结果判断。脚本会从检测输出中过滤上游的广告行，并在最后推荐最多 3 个域名：检测基础条件通过、状态码 200、未识别为 CDN 和热门站点、证书剩余至少 14 天，最终域名与扫描证书域名一致且当前解析包含扫描 IP；按握手时间从低到高排序。没有符合条件的域名时不会强行推荐。
+它会自动探测公网 IP，扫描所在 `/23`（512 个地址，443 端口，100 线程，5 秒超时），把结果写入 `file.csv`，核对证书域名当前解析是否包含扫描到的 IP，再交给 RealityChecker 检测。支持新版扫描器的 CSV 格式；需要 `curl` 和 `python3`，工具不存在时从本仓库 `vendor/` 下载并校验 SHA-256；已有的可执行文件会直接复用。检测用数据也是仓库中的固定快照，不会自动更新。RealityChecker 的检测结果包括不匹配的域名，需结合解析结果判断。脚本会从检测输出中过滤上游的广告行，并在最后推荐最多 3 个域名：检测基础条件通过、状态码 200、未识别为 CDN 和热门站点、证书剩余至少 14 天，最终域名与扫描证书域名一致且当前解析包含扫描 IP；按握手时间从低到高排序。没有符合条件的域名时不会强行推荐。
 
 也可以指定：
 

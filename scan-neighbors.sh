@@ -94,8 +94,13 @@ if [ -z "$EXISTING_CSV" ]; then
   esac
 fi
 
-SCANNER_URL="https://github.com/XTLS/RealiTLScanner/releases/download/${SCANNER_VER}/RealiTLScanner-linux-${ARCH}"
-CHECKER_URL="https://github.com/V2RaySSR/RealityChecker/releases/download/${CHECKER_VER}/reality-checker-linux-${ARCH}.zip"
+VENDOR_URL="https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/vendor"
+SCANNER_URL="$VENDOR_URL/RealiTLScanner-linux-${ARCH}"
+CHECKER_URL="$VENDOR_URL/reality-checker-linux-${ARCH}.zip"
+case "$ARCH" in
+  amd64) SCANNER_HASH=a55595446de9f1c2e6c5c3cd766a7320a11115947df48f101749bb62c8055592; CHECKER_HASH=e021022b3486153abe738d318cb1cf8b2e3909ae9b2e19cbc2e6215db881c9 ;;
+  arm64) SCANNER_HASH=27bdd3e53d4391c66c8df3391d3c3fb5eb2dc356125f2fb33ac58fcaaf8f88b3; CHECKER_HASH=f609bc17be50bc1b2e010eff233d9d9906cfd29081b0e0afb912f75117783cbb ;;
+esac
 
 if [ "$DRY_RUN" = "1" ]; then
   [ -z "$EXISTING_CSV" ] || { info "[dry-run] 使用已有 CSV: $OUT"; exit 0; }
@@ -109,10 +114,22 @@ fi
 
 command -v python3 >/dev/null 2>&1 || die "需要 python3，请先安装: apt install -y python3"
 
-# ---- 工具: 没有就下载 (官方 release, 不是来路不明的脚本) ----
+# ---- 工具: 从仓库下载固定版本，并校验 SHA-256 ----
+verify_sha256() {
+  python3 - "$1" "$2" <<'PYHASH'
+import hashlib
+import sys
+h = hashlib.sha256()
+with open(sys.argv[1], "rb") as f:
+    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+        h.update(chunk)
+sys.exit(0 if h.hexdigest() == sys.argv[2] else 1)
+PYHASH
+}
 if [ -z "$EXISTING_CSV" ] && [ ! -x "$SCANNER" ]; then
   info "下载 RealiTLScanner $SCANNER_VER ..."
   curl -fsSL --max-time 120 -o "$SCANNER.tmp" "$SCANNER_URL" || die "RealiTLScanner 下载失败: $SCANNER_URL"
+  verify_sha256 "$SCANNER.tmp" "$SCANNER_HASH" || { rm -f "$SCANNER.tmp"; die "扫描器 SHA-256 校验失败"; }
   mv "$SCANNER.tmp" "$SCANNER" && chmod +x "$SCANNER"
 elif [ -z "$EXISTING_CSV" ]; then
   info "扫描器已有: $SCANNER"
@@ -120,6 +137,7 @@ fi
 if [ ! -x "$CHECKER" ]; then
   info "下载 RealityChecker $CHECKER_VER ..."
   curl -fsSL --max-time 120 -o "$TOOLS_DIR/reality-checker.zip" "$CHECKER_URL" || die "RealityChecker 下载失败: $CHECKER_URL"
+  verify_sha256 "$TOOLS_DIR/reality-checker.zip" "$CHECKER_HASH" || { rm -f "$TOOLS_DIR/reality-checker.zip"; die "检测器 SHA-256 校验失败"; }
   if command -v unzip >/dev/null 2>&1; then
     unzip -o -q "$TOOLS_DIR/reality-checker.zip" -d "$TOOLS_DIR" || die "解压 RealityChecker 失败"
   else
@@ -140,7 +158,8 @@ fi
 # RealityChecker v2.2.3 使用第 3 列；v0.2.3 扫描器的域名在第 9 列。
 COMPAT="$(mktemp "${TMPDIR:-/tmp}/reality-compatible.XXXXXXXX")" || die "无法创建临时文件"
 REPORT="$(mktemp "${TMPDIR:-/tmp}/reality-report.XXXXXXXX")" || { rm -f -- "$COMPAT"; die "无法创建临时文件"; }
-trap 'rm -f -- "$COMPAT" "$REPORT"' EXIT
+CHECKER_WORK="$(mktemp -d "${TMPDIR:-/tmp}/reality-checker-work.XXXXXXXX")" || { rm -f -- "$COMPAT" "$REPORT"; die "无法创建临时目录"; }
+trap 'rm -f -- "$COMPAT" "$REPORT"; rm -rf -- "$CHECKER_WORK"' EXIT
 info "转换 CSV 并核对域名当前解析（仅供参考）..."
 python3 - "$OUT" "$COMPAT" <<'PYCODE' || die "CSV 转换失败，请检查文件格式"
 import csv
@@ -183,9 +202,27 @@ except (OSError, UnicodeError, csv.Error, ValueError) as exc:
     sys.exit(1)
 PYCODE
 
+# 将固定快照放在临时工作目录，避免检测器自动依赖上游仓库更新数据。
+DATA_CACHE="$TOOLS_DIR/.reality-checker-data"
+mkdir -p "$DATA_CACHE" "$CHECKER_WORK/data" || die "无法创建数据目录"
+while read -r data_name data_hash; do
+  data_path="$DATA_CACHE/$data_name"
+  if [ ! -f "$data_path" ] || ! verify_sha256 "$data_path" "$data_hash"; then
+    info "下载检测数据: $data_name"
+    curl -fsSL --max-time 120 -o "$data_path.tmp" "$VENDOR_URL/data/$data_name" || die "检测数据下载失败: $data_name"
+    verify_sha256 "$data_path.tmp" "$data_hash" || { rm -f "$data_path.tmp"; die "检测数据 SHA-256 校验失败: $data_name"; }
+    mv "$data_path.tmp" "$data_path" || die "无法保存检测数据"
+  fi
+  cp "$data_path" "$CHECKER_WORK/data/$data_name" || die "无法复制检测数据"
+done <<'DATAFILES'
+cdn_keywords.txt e6b6b21cf84007ff45badc1bee76bc0acec53434d606509fc0b8ce480cac36d5
+hot_websites.txt 774a5de42b004bf502f872941e2273eb4796c9639ac5b764a57a8ed4e06aa5b5
+gfwlist.conf 1e05082d0d82eba7bcf7ad1fdc0176b8d397ba3677b662e685683fe560141277
+Country.mmdb c0c6ea5661a3167abb24bbbaf629605aa3856c425384cbf2897c5a0f41027663
+DATAFILES
 info "开始用 RealityChecker 检测证书域名（包括未匹配的域名）..."
 set -o pipefail
-"$CHECKER" csv "$COMPAT" | sed '/goii\.cc\/mn/d' | tee "$REPORT" || die "RealityChecker 执行失败"
+(cd "$CHECKER_WORK" && "$CHECKER" csv "$COMPAT") | sed '/goii\.cc\/mn/d' | tee "$REPORT" || die "RealityChecker 执行失败"
 
 # 仅推荐最终域名与扫描证书域名相同，且当前仍解析到对应扫描 IP 的结果。
 python3 - "$COMPAT" "$REPORT" <<'PYCODE' || die "推荐结果生成失败"
