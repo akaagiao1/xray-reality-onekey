@@ -2,6 +2,26 @@
 
 服务端用 Xray-core，协议是 **VLESS / TCP + REALITY + xtls-rprx-vision**，默认 443 端口、伪装 `www.amazon.com:443`。输出以 Quantumult X（QuanX）优先：直接给能粘贴到 `[server_local]` 的 QuanX 行，再给通用 `vless://` 链接和二维码（终端打印一份，`/root/xray-reality-client.png` 存一份，手机扫码即导入）。
 
+## 环境与依赖
+
+先装好依赖（缺了脚本也会自动装，Debian/Ubuntu 走 apt，Alpine 走 apk，会先 `apk update`，精简版 Alpine 出厂没有仓库索引）：
+
+```bash
+# Debian / Ubuntu
+apt update && apt install -y curl python3
+
+# Alpine
+apk update && apk add --no-cache bash curl python3 gcompat
+```
+
+支持的环境：
+
+- Debian 11/12/13
+- Ubuntu 20.04 / 22.04 / 24.04
+- Alpine Linux（OpenRC；精简版没预装 OpenRC 也能装，脚本会先装上再检测）
+- root 或可 sudo 的用户
+- QuanX **1.5.5+** 才支持 VLESS Reality + Vision，低版本请先升级 QuanX
+
 ## 推荐流程：先扫描，后安装
 
 **不要直接用默认域名装。** 先扫 VPS 所在网段，挑一个冷门的邻居域名做 dest/SNI，再装节点。两条路：
@@ -26,24 +46,6 @@ REALITY_SNI=挑到的域名 bash <(curl -fsSL https://raw.githubusercontent.com/
 | `reality` | 安装 / 查看 / 改配置 / 更新 / 卸载节点 | 直接装（默认域名），或管理已有节点 |
 
 三个脚本都是一行命令跑，不用先下载。`reality` 有终端时进菜单，无终端（管道）时直接安装。
-
-## 适用环境
-
-- Debian 11/12/13
-- Ubuntu 20.04 / 22.04 / 24.04
-- Alpine Linux（OpenRC；精简版没预装 OpenRC 也能装，脚本会先装上再检测）
-- root 或可 sudo 的用户
-- QuanX **1.5.5+** 才支持 VLESS Reality + Vision，低版本请先升级 QuanX
-
-依赖（`curl`、`python3`，Alpine 上扫描还要 `gcompat`）缺了脚本会自动装：Debian/Ubuntu 走 apt，Alpine 走 apk（会先 `apk update`，精简版 Alpine 出厂没有仓库索引）。手动装：
-
-```bash
-# Debian / Ubuntu
-apt update && apt install -y curl python3
-
-# Alpine
-apk update && apk add --no-cache bash curl python3 gcompat
-```
 
 ## 扫描并自动安装
 
