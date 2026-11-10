@@ -10,10 +10,11 @@ if [[ ${1:-} == --help || ${1:-} == -h ]]; then
 fi
 csv=''
 if (( $# )); then
-  [[ $# -eq 2 && $1 == --csv && -r $2 && -f $2 ]] || error '参数无效，请使用 --help 查看用法。'
+  [[ $# -eq 2 && $1 == --csv ]] || error '参数无效，请使用 --help 查看用法。'
+  [[ -f $2 && -r $2 ]] || error "CSV 文件不存在或不可读: $2 (先跑扫描生成, 或确认路径)"
   csv="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
 fi
-[[ $(uname -s) == Linux ]] || error '需要 Debian 或 Ubuntu Linux。'
+[[ $(uname -s) == Linux ]] || error '需要 Linux (Debian / Ubuntu / Alpine)。'
 [[ $(id -u) == 0 ]] || error '请以 root 运行此脚本。'
 command -v curl >/dev/null 2>&1 || error '需要 curl；请先安装 curl 和 ca-certificates。'
 existing_xray() {
@@ -21,13 +22,28 @@ existing_xray() {
 }
 existing_xray && error '检测到现有 Xray 程序、配置或服务，已停止以免覆盖现有节点。'
 if ! command -v python3 >/dev/null 2>&1; then
-  command -v apt-get >/dev/null 2>&1 || error '需要 python3，且未找到 apt-get。'
-  printf '正在通过 apt 安装 python3...\n'
-  apt-get update && apt-get install -y python3 || error 'python3 安装失败。'
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+  fi
+  case "${ID:-}" in
+    alpine)
+      printf '正在通过 apk 安装 python3...\n'
+      apk update >/dev/null 2>&1; apk add --no-cache python3 || error 'python3 安装失败 (apk)。'
+      ;;
+    debian|ubuntu)
+      printf '正在通过 apt 安装 python3...\n'
+      command -v apt-get >/dev/null 2>&1 || error '需要 python3，且未找到 apt-get。'
+      apt-get update && apt-get install -y python3 || error 'python3 安装失败。'
+      ;;
+    *)
+      error '需要 python3，请先手动安装。'
+      ;;
+  esac
 fi
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/auto-reality.XXXXXXXX") || error '无法创建临时目录。'
 trap 'rm -rf -- "$workdir"' EXIT
-base='https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/e58b3d0'
+base='https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/20603c8d8c091d7e447dd5ab7ab66f3f833be291'
 printf '[1/3] 下载扫描脚本...\n'
 curl -fsSL --retry 3 --connect-timeout 15 -o "$workdir/scan-neighbors.sh" "$base/scan-neighbors.sh" || error '扫描脚本下载失败。'
 printf '[2/3] 扫描和筛选候选域名...\n'
