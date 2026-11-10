@@ -10,6 +10,22 @@
 - root 或可 sudo 的用户
 - QuanX **1.5.5+** 才支持 VLESS Reality + Vision，低版本请先升级 QuanX
 
+## 扫描并自动安装（Debian / Ubuntu）
+
+在新 VPS 的 root 终端运行：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/auto-reality.sh)
+```
+
+脚本会扫描本机公网 IPv4 所在 `/23` 的 443 端口，检测候选域名，并将合格结果中握手时间最低的域名作为 SNI/dest 安装 Xray REALITY。已有 Xray 程序、默认配置或服务时，脚本会停止以免覆盖；没有合格结果时也会停止，不使用默认域名。安装会安装依赖、配置 Xray 和服务，并尝试调整防火墙和 BBR。要求 root、curl；缺少 python3 时使用 apt 安装。
+
+只扫描有权扫描的网段，扫描器上游建议在本地扫描，VPS 扫描可能被标记。推荐只是基于检测时的数据，无法保证同 ASN、稳定或避免封锁。已有扫描结果可跳过扫描：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/auto-reality.sh) --csv file.csv
+```
+
 ## 一键安装
 
 ```bash
@@ -74,19 +90,21 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/scan-neighbors.sh)
 ```
 
-它会：自动探测本机公网 IP → 扫它所在的 /24（`RealiTLScanner`，线程 100、超时 5 秒，结果写 `file.csv`）→ 再用 `RealityChecker` 过滤，只留 TLS 1.3 + X25519 + h2 + SNI 匹配、无 CDN、非热门的。两个工具没有就自动从官方 release 下载（已有就跳过）。
+它会自动探测公网 IP，扫描所在 `/23`（512 个地址，443 端口，100 线程，5 秒超时），把结果写入 `file.csv`，核对证书域名当前解析是否包含扫描到的 IP，再交给 RealityChecker 检测。支持新版扫描器的 CSV 格式；需要 `curl` 和 `python3`，工具不存在时从本仓库 `vendor/` 下载并校验 SHA-256；已有的可执行文件会直接复用。下载失败或 SHA-256 不匹配时自动重试并切换到仓库备用地址，不匹配的文件不会执行。检测用数据也是仓库中的固定快照，不会自动更新。RealityChecker 的检测结果包括不匹配的域名，需结合解析结果判断。脚本会从检测输出中过滤上游的广告行，并在最后推荐最多 3 个域名：检测基础条件通过、状态码 200、未识别为 CDN 和热门站点、证书剩余至少 14 天，最终域名与扫描证书域名一致且当前解析包含扫描 IP；按握手时间从低到高排序。没有符合条件的域名时不会强行推荐。
 
 也可以指定：
 
 ```bash
-# 指定 IP（自动换成它所在的 /24）或网段、输出文件名
-bash scan-neighbors.sh 154.9.236.158
-bash scan-neighbors.sh 154.9.236.0/24 file2.csv
+# 指定 IP（自动换成它所在的 /23）或网段、输出文件名
+bash scan-neighbors.sh 154.9.236.158  # 默认扫描所在 /23
+bash scan-neighbors.sh 154.9.236.0/24 file2.csv  # 指定范围
+# 使用已有结果重新检测，不重新扫描
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/scan-neighbors.sh) --csv file.csv
 # 只看要执行的命令，不真扫
 bash scan-neighbors.sh --dry-run 154.9.236.158
 ```
 
-注意：官方建议扫描器尽量在本地跑，VPS 上扫有被标记的风险，只扫一个 /24 一般问题不大。裸 IP 会自动换成 /24（单个 IP 会触发扫描器的 infinity 模式一直扫不停）。扫出来挑个冷门的，用 `REALITY_SNI=域名` 装节点，或装完 `bash reality reconfig` 改过去。
+注意：上游建议在本地扫描，VPS 上扫描可能被标记；仅扫描获授权的目标。裸 IP 会自动换成所在的 /23；可以手动指定 /24 或其他获授权的 CIDR。扫描更多地址不保证找到更多可用域名。DNS 匹配只是当前时刻的参考，并不证明同 ASN 或保证连接稳定；如果检测器显示最终域名与扫描域名不同，需单独核对最终域名的解析。再次扫描可能覆盖 `file.csv`。
 
 ## Quantumult X 配置（重点）
 
