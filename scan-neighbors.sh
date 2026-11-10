@@ -22,6 +22,30 @@ info() { printf '[INFO] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*" >&2; }
 die()  { printf '[ERROR] %s\n' "$*" >&2; exit 1; }
 
+# ---- 系统识别: 只有包管理器名不一样, 其余逻辑与发行版无关 ----
+OS_ID=""
+if [ -f /etc/os-release ]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  OS_ID="${ID:-}"
+fi
+
+# 装一个包 (Alpine 走 apk, Debian/Ubuntu 走 apt); 装不上就停, 并给对的提示
+pkg_install() { # $1=包名 $2=用途(写给用户看)
+  case "$OS_ID" in
+    alpine)
+      apk update >/dev/null 2>&1
+      apk add --no-cache "$1" 2>/dev/null || die "安装 $1 失败 (apk); 手动装: apk update && apk add $1"
+      ;;
+    debian|ubuntu)
+      (command -v apt-get >/dev/null 2>&1 && apt-get update >/dev/null 2>&1 && apt-get install -y "$1") || die "安装 $1 失败 (apt); 手动装: apt update && apt install -y $1"
+      ;;
+    *)
+      die "需要 $1 ($2), 请手动安装后重跑 (当前系统: ${OS_ID:-未知})"
+      ;;
+  esac
+}
+
 usage() {
   printf '%s\n' "用法: bash scan-neighbors.sh [IP或网段] [输出csv] [--dry-run]"
   printf '%s\n' "  不给 IP: 自动探测本机公网 IP, 扫它所在的 /23"
@@ -69,7 +93,13 @@ case "$ARCH_RAW" in
   aarch64|arm64) ARCH="arm64" ;;
   *) die "不支持的架构: $ARCH_RAW (只支持 amd64/arm64)" ;;
 esac
-command -v curl >/dev/null 2>&1 || die "需要 curl, 先装: apt install -y curl"
+if ! command -v curl >/dev/null 2>&1; then
+  case "$OS_ID" in
+    alpine) die "需要 curl, 先装: apk update && apk add curl" ;;
+    debian|ubuntu) die "需要 curl, 先装: apt update && apt install -y curl" ;;
+    *) die "需要 curl, 请手动安装后重跑" ;;
+  esac
+fi
 
 public_ip() {
   local ip=""
@@ -115,7 +145,21 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
-command -v python3 >/dev/null 2>&1 || die "需要 python3，请先安装: apt install -y python3"
+# python3 是必需的: SHA-256 校验、CSV 转换、推荐筛选全是 python 写的
+if ! command -v python3 >/dev/null 2>&1; then
+  info "没找到 python3, 正在安装..."
+  pkg_install python3 "python3 (SHA-256 校验 / CSV 转换 / 推荐筛选要用)"
+fi
+
+# 扫描器/检测器是 glibc 动态链接的二进制, Alpine (musl) 上没有
+# /lib64/ld-linux-x86-64.so.2, 直接跑会报 "cannot execute: required file not found";
+# 装 gcompat 提供 glibc 兼容层就能跑 (Xray 本身是静态编译, 不用这个)
+if [ "$OS_ID" = "alpine" ]; then
+  if ! apk info -e gcompat >/dev/null 2>&1; then
+    info "Alpine 上跑扫描器需要 gcompat (glibc 兼容层), 正在安装..."
+    pkg_install gcompat "gcompat (跑 glibc 链接的扫描器/检测器要用)"
+  fi
+fi
 
 # ---- 工具: 从仓库下载固定版本，并校验 SHA-256 ----
 verify_sha256() {
@@ -174,7 +218,7 @@ fi
 # ---- 第一步: 扫邻居或使用已有结果 ----
 if [ -z "$EXISTING_CSV" ]; then
   info "开始扫描 $CIDR (线程 $THREADS, 超时 ${TIMEOUT}s, 输出 $OUT)..."
-  "$SCANNER" -addr "$CIDR" -port 443 -thread "$THREADS" -timeout "$TIMEOUT" -out "$OUT" || die "扫描器执行失败"
+  "$SCANNER" -addr "$CIDR" -port 443 -thread "$THREADS" -timeout "$TIMEOUT" -out "$OUT" || die "扫描器执行失败 (Alpine 上若报 required file not found, 是缺 glibc 兼容层, 装 gcompat: apk update && apk add gcompat)"
 fi
 [ -s "$OUT" ] || die "扫描结果不存在或为空: $OUT"
 

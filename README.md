@@ -162,4 +162,5 @@ REALITY_UUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx XRAY_VERSION=v26.10.31 bash re
 - **Alpine 上服务起不来**：先看 `rc-service xray status`，再确认 `rc-update show` 里 `xray` 在 default 运行级；精简版 Alpine 的 OpenRC 由脚本自动安装。
 - **Alpine 上 `apk add` 报 no such package / 依赖安装失败**：精简版 Alpine 出厂没有仓库索引，装任何包之前必须先 `apk update`；脚本装依赖和装二维码工具前都会自动跑一遍 `apk update`，手动装包也记得先 update。
 - **Alpine 上没有二维码**：Alpine 里二维码命令行不在 `qrencode` 包里，在 `libqrencode-tools` 里，`apk add qrencode` 永远装不上；脚本已改成装 `libqrencode-tools`，装好后跑 `bash reality show` 可补生成。
+- **Alpine 上扫描报错（`required file not found` / 提示装 python3）**：扫描器和检测器是 glibc 链接的，Alpine（musl）上要装 `gcompat` 才能跑；python3 缺了也要装。两个脚本都会自动装（Alpine 走 apk，Debian/Ubuntu 走 apt），手动装：`apk update && apk add python3 gcompat`。`apk add` 没有 `-y` 参数，别加。
 - **私钥别外发**：私钥只在服务端 `/usr/local/etc/xray/config.json` 里，客户端只需要 UUID + 公钥 + shortId。
