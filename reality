@@ -270,7 +270,11 @@ install_deps() {
         apt-get install -y qrencode 2>/dev/null || warn "qrencode 安装失败, 本次没有二维码; 装好后跑 bash reality show 可补生成"
         ;;
       alpine)
-        apk add --no-cache qrencode 2>/dev/null || warn "qrencode 未装上, 本次没有二维码; 装好后跑 bash reality show 可补生成"
+        # Alpine 里二维码命令行不在 qrencode 包里, 在 libqrencode-tools 里,
+        # apk add qrencode 在 Alpine 上永远报 no such package;
+        # 依赖已齐全时上面没跑 apk update, 这里先更索引再装
+        apk update >/dev/null 2>&1
+        apk add --no-cache libqrencode-tools 2>/dev/null || warn "qrencode 未装上, 本次没有二维码; 装好后跑 bash reality show 可补生成"
         ;;
     esac
   fi
@@ -286,9 +290,15 @@ _install_deps_pkg() {
         die "依赖安装失败"
       ;;
     alpine)
-      # 先装 openrc 再检测 init (见 detect_init 注释, 精简版 Alpine 必需)
-      apk add --no-cache bash curl wget unzip ca-certificates openssl jq openrc iproute2 procps 2>/dev/null || \
-        apk add --no-cache bash curl wget unzip ca-certificates openssl jq openrc || \
+      # 精简版 Alpine 出厂没有仓库索引 (/lib/apk/db 里没有 APKINDEX),
+      # 不先 apk update 的话 apk add 直接报 no such package, 依赖装不上;
+      # update 失败也继续试 (索引可能已在缓存里), 装不上再报错
+      apk update >/dev/null 2>&1 || warn "apk update 失败, 尝试用现有索引继续安装"
+      # 先装 openrc 再检测 init (见 detect_init 注释, 精简版 Alpine 必需);
+      # ss 不在 iproute2 里, 在 iproute2-ss 里, 不装它端口占用判断会失灵
+      # (port_owner_is_xray 认不出占用者是 Xray 自己, 重装会误判端口被占)
+      apk add --no-cache bash curl wget unzip ca-certificates openssl jq openrc iproute2 iproute2-ss procps 2>/dev/null || \
+        apk add --no-cache bash curl wget unzip ca-certificates openssl jq openrc iproute2-ss || \
         die "依赖安装失败 (apk)"
       update-ca-certificates 2>/dev/null || true
       ;;
@@ -377,6 +387,8 @@ public_ip() {
   local ip=""
   ip="$(curl -4fsSL --max-time 8 https://ifconfig.me 2>/dev/null | tr -d ' \r\n')" || true
   [ -n "$ip" ] || ip="$(curl -4fsSL --max-time 8 https://api.ipify.org 2>/dev/null | tr -d ' \r\n')" || true
+  # BusyBox hostname 没有 -I (Alpine 上直接报错), 先用 ip 命令取本机 IP
+  [ -n "$ip" ] || ip="$(ip -4 addr show scope global 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -1)"
   [ -n "$ip" ] || ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
   printf '%s' "$ip"
 }
@@ -489,7 +501,14 @@ prompt_sni() { # $1=当前值(已有配置或默认) ; 交互时让用户自选�
   return 1
 }
 
-write_config() { # $1=uuid $2=priv $3=shortid $4=port $5=sni ; 写配置并校验  local uuid="$1" priv="$2" shortid="$3" port="$4" sni="$5"
+write_config() { # $1=uuid $2=priv $3=shortid $4=port $5=sni ; 写配置并校验
+  # 注意: 下面这行 local 必须单独成行。之前它跟在行尾 # 注释后面,
+  # 整行都被当成注释, 参数根本没绑上, 函数是靠 bash 动态作用域偷看到
+  # 调用者的同名 local 变量才工作的。do_install 里恰好有 port/sni
+  # 同名变量所以能装, do_reconfig 里只有 new_port/new_sni,
+  # port/sni 为空, heredoc 在 set -u 下直接把配置文件截成 0 字节,
+  # reconfig 必挂。改成显式绑定后与调用者变量名无关。
+  local uuid="$1" priv="$2" shortid="$3" port="$4" sni="$5"
   mkdir -p "$CONFIG_DIR"
   [ -f "$CONFIG_FILE" ] && cp -a "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
   cat > "$CONFIG_FILE" <<EOF
