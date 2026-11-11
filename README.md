@@ -2,6 +2,18 @@
 
 服务端用 Xray-core，协议是 **VLESS / TCP + REALITY + xtls-rprx-vision**，默认 443 端口、伪装 `www.amazon.com:443`。输出 Surge `[Proxy]` 节点行、Quantumult X（QuanX）`[server_local]` 节点行、通用 `vless://` 链接和二维码（终端打印一份，`/root/xray-reality-client.png` 存一份，手机扫码即导入）。
 
+## Surge 快速使用
+
+如果 VPS 上已经装好了节点，使用 root 登录 VPS 后运行：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality) show
+```
+
+复制输出中 **Surge** 下的整行，粘贴到 Surge 配置的 `[Proxy]` 段，然后在 Surge 中选择该节点。客户端配置也保存在 VPS 的 `/root/xray-reality-client.txt`；文件包含连接凭据，请勿公开分享。
+
+还没安装节点？继续阅读下面的“推荐流程：先扫描，后安装”。该配置需要 Surge iOS **6.0.0+** 或 Surge Mac **6.12.0+**；完整示例和参数说明见下方“Surge 配置”。
+
 ## 环境与依赖
 
 先装好依赖（缺了脚本也会自动装，Debian/Ubuntu 走 apt，Alpine 走 apk，会先 `apk update`，精简版 Alpine 出厂没有仓库索引）：
