@@ -1,6 +1,6 @@
 # Xray VLESS + REALITY 一键脚本（支持 Surge 和 Quantumult X）
 
-服务端用 Xray-core，协议是 **VLESS / TCP + REALITY + xtls-rprx-vision**，默认 443 端口、伪装 `www.amazon.com:443`。输出 Surge `[Proxy]` 节点行、Quantumult X（QuanX）`[server_local]` 节点行、通用 `vless://` 链接和二维码（终端打印一份，`/root/xray-reality-client.png` 存一份，手机扫码即导入）。
+服务端用 Xray-core，协议是 **VLESS / TCP + REALITY + xtls-rprx-vision**，默认使用 443 端口；自动安装会从扫描结果中挑选符合条件的邻居域名作为 REALITY 的目标站和 SNI。输出 Surge `[Proxy]` 节点行、Quantumult X（QuanX）`[server_local]` 节点行、通用 `vless://` 链接和二维码（终端打印一份，`/root/xray-reality-client.png` 存一份，手机扫码即导入）。
 
 ## Surge 快速使用
 
@@ -94,7 +94,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 已经有个想用的域名（刚筛出来的冷门域名，或自己验证过的），直接装：
 
 ```bash
-REALITY_SNI=heiheiai.shop bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality) install
+REALITY_SNI=你的邻居域名 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality) install
 ```
 
 装完想换域名，不用重装：`bash reality reconfig`，改完旧的 QuanX 行 / 链接 / 二维码全部作废，脚本会重新输出新的。
@@ -136,7 +136,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 
 无终端（管道）时直接安装；有终端时进菜单：安装 / 查看配置 / 更新 / 重启 / 卸载 / 更改配置（域名、端口、密钥）。
 
-安装时会问伪装域名（Reality dest/SNI）：直接回车用默认 `www.amazon.com`，也可以自己填一个，比如刚筛出来的冷门域名 `heiheiai.shop`。填了 CF 的站、或解析到 CF IP 的站会被拒绝并重问（最多 3 次）；非交互安装（管道）不提问，用环境变量 `REALITY_SNI` 指定，不指定就用默认。
+安装时会问伪装域名（Reality dest/SNI）：新安装时应填写筛选出的邻居域名；如果直接回车，单独安装脚本当前会回退到 `www.amazon.com`。填了 CF 的站、或解析到 CF IP 的站会被拒绝并重问（最多 3 次）；非交互安装（管道）不提问，用环境变量 `REALITY_SNI` 指定，不指定就用默认。
 
 也可以直接指定操作：
 
@@ -182,7 +182,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 
 重装 / 升级时，已有配置的 UUID、私钥、端口、SNI、shortId 全部保留，不会悄悄换掉客户端配置。**要改这些，跑 `bash reality reconfig`（菜单 6）**：改域名、改端口、重新生成密钥（新私钥/公钥 + 新 shortId）、换 UUID 都可以单改，改完旧的 QuanX 行 / 链接 / 二维码全部作废，脚本会重新输出新的。改端口、改域名同样过 Cloudflare 硬规则（CF 反代端口、CF 站直接拒绝）和端口占用检查。
 
-默认伪装站选 `www.amazon.com` 而不是更常见的 `www.apple.com` / `www.microsoft.com`，是因为实测 Xray 26.10.31 对后两者会警告“会增加服务器 IP 被 GFW 封的概率”，对 `www.amazon.com` 则不警告。想跟已有 sing-box 节点保持一致，可用 `REALITY_SNI=www.apple.com` 改回去，服务端与 QuanX 行的 SNI 会一起变。
+自动安装通过 `REALITY_SNI` 将扫描得到的推荐域名传给安装脚本。单独运行 `reality install` 时，若没有提供域名且没有已有配置，当前实现仍会回退到 `www.amazon.com`；如需使用邻居域名，应显式指定 `REALITY_SNI`。
 
 ## Surge 配置
 
@@ -194,7 +194,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 
 ```ini
 [Proxy]
-Reality = vless, 服务器IP, 443, username=<UUID>, flow=xtls-rprx-vision, sni=www.example.com, reality-public-key=<公钥>, reality-short-id=<shortId>
+Reality = vless, 服务器IP, 443, username=<UUID>, flow=xtls-rprx-vision, sni=<你的邻居域名>, reality-public-key=<公钥>, reality-short-id=<shortId>
 ```
 
 上面是格式示例，使用脚本输出的真实值。Surge 的 REALITY 无需额外设置 `tls=true`，VLESS 默认支持 UDP relay；客户端使用自己的 TLS 栈。需要 Surge iOS **6.0.0+** 或 Mac **6.12.0+**，详见 [Surge VLESS 官方文档](https://manual.nssurge.com/policies/vless.html)。请保护包含 UUID、公钥和 shortId 的客户端文件，避免公开分享。
@@ -204,7 +204,7 @@ Reality = vless, 服务器IP, 443, username=<UUID>, flow=xtls-rprx-vision, sni=w
 安装完成后，**优先用这一行**，粘贴到 QuanX 配置的 `[server_local]`：
 
 ```ini
-vless=服务器IP:443, method=none, password=<UUID>, obfs=over-tls, obfs-host=www.amazon.com, reality-base64-pubkey=<公钥>, reality-hex-shortid=<16位hex>, vless-flow=xtls-rprx-vision, udp-relay=true, tag=Reality-QuanX
+vless=服务器IP:443, method=none, password=<UUID>, obfs=over-tls, obfs-host=<你的邻居域名>, reality-base64-pubkey=<公钥>, reality-hex-shortid=<16位hex>, vless-flow=xtls-rprx-vision, udp-relay=true, tag=Reality-QuanX
 ```
 
 不要只靠 `vless://` 链接导入：旧版解析器可能丢 `reality` 参数，节点会显示出来但连不上。
@@ -222,7 +222,7 @@ QuanX 兼容的关键点（依据 QuanX 官方 `sample.conf` v1.5.5 build 914）
 通用 `vless://` 链接（给其他客户端，如 sing-box / Shadowrocket / Loon）：
 
 ```text
-vless://<UUID>@<服务器IP>:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.amazon.com&fp=chrome&pbk=<公钥>&sid=<shortId>&type=tcp&headerType=none#Reality-QuanX
+vless://<UUID>@<服务器IP>:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=<你的邻居域名>&fp=chrome&pbk=<公钥>&sid=<shortId>&type=tcp&headerType=none#Reality-QuanX
 ```
 
 ## 可选参数
@@ -231,7 +231,7 @@ vless://<UUID>@<服务器IP>:443?encryption=none&flow=xtls-rprx-vision&security=
 
 ```bash
 # 换端口 / 换伪装站 / 换节点名
-REALITY_PORT=24443 REALITY_SNI=www.apple.com REALITY_TAG=Reality-US bash reality install
+REALITY_PORT=24443 REALITY_SNI=你的邻居域名 REALITY_TAG=Reality-US bash reality install
 
 # 用域名做客户端地址（而不是自动探测的公网 IP）
 REALITY_HOST=example.com bash reality install
@@ -245,7 +245,7 @@ REALITY_UUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx XRAY_VERSION=v26.10.31 bash re
 这三条是硬规则，脚本安装前会直接校验，不合规就拒绝安装，不悄悄放行：
 
 - **端口**：默认 443 保留。Reality 要冒充 443 上的真站，且客户端直连 VPS IP、不走 CF 反代，443 本身不是问题。**自定义端口绝不能是 CF 反代端口**：HTTP（80、8080、8880、2052、2082、2086、2095）和 HTTPS（2053、2083、2087、2096、8443）。例如 `REALITY_PORT=8443` 是错的，换 `24443` 这类不在列表里的端口。**端口要自定义或未占用**：默认 443 被 nginx 等服务占了，脚本自动改用 20000–60000 里随机挑的未占用、非 CF 端口，并在输出里明说换成了哪个；`REALITY_PORT` 显式指定的端口被占了，脚本直接报错停下，不悄悄换掉你指定的端口。
-- **Reality 域名（dest / SNI）**：绝不能是 CF 的站，也不能是解析到 CF IP 的站。默认 `www.amazon.com` 已实测不在 CF 后面。原理：鉴权失败的流量会原样回落转发到 dest，如果 dest 是 CF CDN 站，你的服务器就成了别人免费的 CF 端口转发，扫到后会被偷流量。根治办法是选非 CF 目标站，而不是开 `limitFallback*` 限速（那是可识别特征，XTLS 文档明确不建议一键脚本用）。
+- **Reality 域名（dest / SNI）**：绝不能是 CF 的站，也不能是解析到 CF IP 的站。自动安装使用筛选结果，并由安装脚本检查域名及其解析地址。原理：鉴权失败的流量会原样回落转发到 dest，如果 dest 是 CF CDN 站，你的服务器就成了别人免费的 CF 端口转发，扫到后会被偷流量。根治办法是选非 CF 目标站，而不是开 `limitFallback*` 限速（那是可识别特征，XTLS 文档明确不建议一键脚本用）。
 - **客户端地址**：`REALITY_HOST` 只能填 VPS 直连 IP，或未走 CF 反代的域名。填了 CF 反代域名，握手会被 CF 终结，QuanX 直接连不上。
 
 ## 仓库说明
