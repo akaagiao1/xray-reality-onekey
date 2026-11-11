@@ -1,6 +1,6 @@
-# Xray VLESS + REALITY 一键脚本（主攻 Quantumult X）
+# Xray VLESS + REALITY 一键脚本（支持 Surge 和 Quantumult X）
 
-服务端用 Xray-core，协议是 **VLESS / TCP + REALITY + xtls-rprx-vision**，默认 443 端口、伪装 `www.amazon.com:443`。输出以 Quantumult X（QuanX）优先：直接给能粘贴到 `[server_local]` 的 QuanX 行，再给通用 `vless://` 链接和二维码（终端打印一份，`/root/xray-reality-client.png` 存一份，手机扫码即导入）。
+服务端用 Xray-core，协议是 **VLESS / TCP + REALITY + xtls-rprx-vision**，默认 443 端口、伪装 `www.amazon.com:443`。输出 Surge `[Proxy]` 节点行、Quantumult X（QuanX）`[server_local]` 节点行、通用 `vless://` 链接和二维码（终端打印一份，`/root/xray-reality-client.png` 存一份，手机扫码即导入）。
 
 ## 环境与依赖
 
@@ -21,6 +21,7 @@ apk update && apk add --no-cache bash curl python3 gcompat
 - Alpine Linux（OpenRC；精简版没预装 OpenRC 也能装，脚本会先装上再检测）
 - root 或可 sudo 的用户
 - QuanX **1.5.5+** 才支持 VLESS Reality + Vision，低版本请先升级 QuanX
+- Surge **iOS 6.0.0+ / Mac 6.12.0+** 支持 VLESS + REALITY + Vision；请确认客户端版本支持
 
 ## 推荐流程：先扫描，后安装
 
@@ -164,14 +165,29 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 - 写 `/usr/local/etc/xray/config.json`，`xray -test` 校验通过才启动
 - 创建并启动 systemd 或 OpenRC 服务 `xray`，开机自启
 - UFW / firewalld / iptables 放行端口（尽力而为）
-- 输出客户端配置并保存到 `/root/xray-reality-client.txt`，同时生成二维码：终端打印一份，PNG 存到 `/root/xray-reality-client.png`（装 `qrencode` 失败时跳过二维码，不中断安装，装好后跑 `bash reality show` 可补生成）
+- 输出 Surge 和 QuanX 客户端配置并保存到 `/root/xray-reality-client.txt`，同时生成二维码：终端打印一份，PNG 存到 `/root/xray-reality-client.png`（装 `qrencode` 失败时跳过二维码，不中断安装，装好后跑 `bash reality show` 可补生成）
 - 依赖已齐全时跳过包管理器安装，二次运行改配置不必再跑一遍 apt/apk
 
 重装 / 升级时，已有配置的 UUID、私钥、端口、SNI、shortId 全部保留，不会悄悄换掉客户端配置。**要改这些，跑 `bash reality reconfig`（菜单 6）**：改域名、改端口、重新生成密钥（新私钥/公钥 + 新 shortId）、换 UUID 都可以单改，改完旧的 QuanX 行 / 链接 / 二维码全部作废，脚本会重新输出新的。改端口、改域名同样过 Cloudflare 硬规则（CF 反代端口、CF 站直接拒绝）和端口占用检查。
 
 默认伪装站选 `www.amazon.com` 而不是更常见的 `www.apple.com` / `www.microsoft.com`，是因为实测 Xray 26.10.31 对后两者会警告“会增加服务器 IP 被 GFW 封的概率”，对 `www.amazon.com` 则不警告。想跟已有 sing-box 节点保持一致，可用 `REALITY_SNI=www.apple.com` 改回去，服务端与 QuanX 行的 SNI 会一起变。
 
-## Quantumult X 配置（重点）
+## Surge 配置
+
+安装后复制输出中的 Surge 配置行到 Surge 配置的 `[Proxy]` 段；已有节点可以运行下面的命令重新生成配置：`reconfig` 完成后也会输出更新的节点行。
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality) show
+```
+
+```ini
+[Proxy]
+Reality = vless, 服务器IP, 443, username=<UUID>, flow=xtls-rprx-vision, sni=www.example.com, reality-public-key=<公钥>, reality-short-id=<shortId>
+```
+
+上面是格式示例，使用脚本输出的真实值。Surge 的 REALITY 无需额外设置 `tls=true`，VLESS 默认支持 UDP relay；客户端使用自己的 TLS 栈。需要 Surge iOS **6.0.0+** 或 Mac **6.12.0+**，详见 [Surge VLESS 官方文档](https://manual.nssurge.com/policies/vless.html)。请保护包含 UUID、公钥和 shortId 的客户端文件，避免公开分享。
+
+## Quantumult X 配置
 
 安装完成后，**优先用这一行**，粘贴到 QuanX 配置的 `[server_local]`：
 

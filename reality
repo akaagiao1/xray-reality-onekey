@@ -367,6 +367,11 @@ existing_value() { # $1=key: uuid|priv|pub|shortid|port|sni
   esac
 }
 
+# 新版 Xray 将 Public key 字段命名为 Password（可能带 PublicKey 注释）。
+extract_xray_public() {
+  awk -F: 'tolower($1) ~ /^[[:space:]]*(public|password)/ {gsub(/[[:space:]]/, "", $2); print $2; exit}'
+}
+
 gen_uuid() {
   if [ -r /proc/sys/kernel/random/uuid ]; then cat /proc/sys/kernel/random/uuid
   elif command -v uuidgen >/dev/null 2>&1; then uuidgen
@@ -378,7 +383,7 @@ gen_keypair() { # 输出两行: 私钥 / 公钥
   out="$("$XRAY_BIN" x25519 2>/dev/null)" || die "xray x25519 生成密钥失败"
   # 新版输出 "Private key: xxx" / "Public key: yyy", 兼容 "PrivateKey:" 写法
   priv="$(printf '%s' "$out" | grep -i 'private' | head -1 | sed -E 's/.*:[[:space:]]*//;s/[[:space:]]//g')"
-  pub="$(printf '%s' "$out" | grep -i 'public' | head -1 | sed -E 's/.*:[[:space:]]*//;s/[[:space:]]//g')"
+  pub="$(printf '%s' "$out" | extract_xray_public)"
   [ -n "$priv" ] && [ -n "$pub" ] || die "解析 x25519 密钥失败, xray 输出: $out"
   printf '%s\n%s\n' "$priv" "$pub"
 }
@@ -584,7 +589,7 @@ do_install() {
   priv="$(existing_value priv)"
   if [ -n "$priv" ]; then
     # 已有私钥则用它反推公钥, 保持客户端配置不变
-    pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | grep -i 'public' | head -1 | sed -E 's/.*:[[:space:]]*//;s/[[:space:]]//g')"
+    pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | extract_xray_public)"
     [ -n "$pub" ] || die "已有私钥无法反推公钥, 请删配置重装或检查私钥"
   else
     local kp; kp="$(gen_keypair)"
@@ -627,6 +632,13 @@ show_info() { # $1=uuid $2=pubkey $3=shortid $4=port $5=sni
   # QuanX 行: 按官方 sample.conf vless-tls-reality-vision-01 的写法,
   # obfs=over-tls + obfs-host=<SNI>, 不带 fast-open (Reality 下必须关, 见文件头注释)
   local qx="vless=${host}:${port}, method=none, password=${uuid}, obfs=over-tls, obfs-host=${sni}, reality-base64-pubkey=${pub}, reality-hex-shortid=${shortid}, vless-flow=xtls-rprx-vision, udp-relay=true, tag=${tag}"
+  # Surge 官方 VLESS 参数：REALITY 无需 tls=true，UDP relay 默认启用。
+  # 节点名中的分隔符会破坏 Surge 配置行，替换为空格。
+  local surge_tag="${tag//,/ }"
+  surge_tag="${surge_tag//=/ }"
+  surge_tag="${surge_tag//$'\n'/ }"
+  surge_tag="${surge_tag//$'\r'/ }"
+  local surge="${surge_tag} = vless, ${host}, ${port}, username=${uuid}, flow=xtls-rprx-vision, sni=${sni}, reality-public-key=${pub}, reality-short-id=${shortid}"
   # 二维码: vless:// 链接扫码即导入; 先生成 PNG, 再在终端打印一份
   local qr_note=""
   if command -v qrencode >/dev/null 2>&1; then
@@ -639,11 +651,14 @@ show_info() { # $1=uuid $2=pubkey $3=shortid $4=port $5=sni
     qr_note="二维码: 未生成 (未装 qrencode; 装好后跑 bash reality show 补生成)"
   fi
   {
-    printf '%s\n' "Xray VLESS + REALITY + Vision (QuanX)"
+    printf '%s\n' "Xray VLESS + REALITY + Vision"
     printf '%s\n' "地址: ${host}:${port}  SNI/dest: ${sni}  指纹: chrome (服务端不填, 客户端用)"
     printf '%s\n' ""
     printf '%s\n' "--- Quantumult X (推荐, 直接粘贴到 [server_local]) ---"
     printf '%s\n' "$qx"
+    printf '%s\n' ""
+    printf '%s\n' "--- Surge (直接粘贴到 [Proxy]) ---"
+    printf '%s\n' "$surge"
     printf '%s\n' ""
     printf '%s\n' "--- 通用 vless:// 链接 (其他客户端导入) ---"
     printf '%s\n' "$link"
@@ -661,7 +676,7 @@ show_info() { # $1=uuid $2=pubkey $3=shortid $4=port $5=sni
   printf '\n'
   info "客户端配置已保存到 $CLIENT_FILE"
   [ -f "$CLIENT_PNG" ] && info "二维码已保存到 $CLIENT_PNG"
-  info "QuanX 要求 1.5.5+ 才支持 VLESS Reality + Vision, 低版本请先升级 QuanX"
+  info "QuanX 要求 1.5.5+；Surge 要求 iOS 6.0.0+ 或 Mac 6.12.0+ 支持此配置"
   warn "私钥在 $CONFIG_FILE 里, 别把配置文件 / 客户端文件发到公开地方"
 }
 
@@ -671,7 +686,7 @@ do_show() {
   uuid="$(existing_value uuid)"; port="$(existing_value port)"
   sni="$(existing_value sni)"; shortid="$(existing_value shortid)"
   local priv; priv="$(existing_value priv)"
-  pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | grep -i 'public' | head -1 | sed -E 's/.*:[[:space:]]*//;s/[[:space:]]//g')"
+  pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | extract_xray_public)"
   [ -n "$uuid" ] && [ -n "$pub" ] && [ -n "$shortid" ] || die "配置不完整, 请重装"
   show_info "$uuid" "$pub" "$shortid" "$port" "$sni"
 }
@@ -722,7 +737,7 @@ do_reconfig() {
   fi
   if [ "$regen_uuid" = "1" ]; then uuid="$(gen_uuid)"; info "已重新生成 UUID"; fi
   if [ -z "$pub" ]; then
-    pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | grep -i 'public' | head -1 | sed -E 's/.*:[[:space:]]*//;s/[[:space:]]//g')"
+    pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | extract_xray_public)"
     [ -n "$pub" ] || die "私钥无法反推公钥, 请检查配置"
   fi
 
@@ -787,9 +802,9 @@ do_status() {
 }
 
 menu() {
-  printf '%s\n' "Xray VLESS + REALITY (主攻 QuanX) 一键脚本"
+  printf '%s\n' "Xray VLESS + REALITY (Surge / QuanX) 一键脚本"
   printf '%s\n' "  1) 安装 / 重装 (会问伪装域名, 回车保持当前)"
-  printf '%s\n' "  2) 查看客户端配置 (QuanX 行 + vless://)"
+  printf '%s\n' "  2) 查看客户端配置 (Surge / QuanX / vless://)"
   printf '%s\n' "  3) 更新 Xray 到最新版"
   printf '%s\n' "  4) 重启服务"
   printf '%s\n' "  5) 卸载 (保留配置)"
