@@ -5,7 +5,7 @@ error() { printf '[错误] %s\n' "$*" >&2; exit 1; }
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
   printf '%s\n' '用法: bash auto-reality.sh [--csv 已有扫描结果.csv]' \
     '默认在本机扫描公网 IPv4 所在 /23；--csv 使用已有扫描结果。' \
-    '无合格候选或已有 Xray 配置时停止，不自动安装。'
+    '扫不到合格候选时改用 www.apple.com 安装；已有 Xray 配置时停止，不覆盖。'
   exit 0
 fi
 csv=''
@@ -47,17 +47,28 @@ base='https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/c49797891b
 printf '[1/3] 下载扫描脚本...\n'
 curl -fsSL --retry 3 --connect-timeout 15 -o "$workdir/scan-neighbors.sh" "$base/scan-neighbors.sh" || error '扫描脚本下载失败。'
 printf '[2/3] 扫描和筛选候选域名...\n'
+# 扫不到合格域名不硬停: 改用默认域名安装 (用户要求, 2026-11-12)。
+# 扫描失败、推荐文件为空、推荐值格式无效, 三种情况都回退, 并在输出里明说。
+scan_ok=1
 if [[ -n $csv ]]; then
-  (cd "$workdir" && bash ./scan-neighbors.sh --csv "$csv" --recommend-file "$workdir/recommended.txt") || error '候选检测失败，已停止安装。'
+  (cd "$workdir" && bash ./scan-neighbors.sh --csv "$csv" --recommend-file "$workdir/recommended.txt") || scan_ok=0
 else
   printf '注意：将从本机扫描公网 IP 所在的 /23；仅扫描获授权的网段。\n'
-  (cd "$workdir" && bash ./scan-neighbors.sh --recommend-file "$workdir/recommended.txt") || error '扫描或检测失败，已停止安装。'
+  (cd "$workdir" && bash ./scan-neighbors.sh --recommend-file "$workdir/recommended.txt") || scan_ok=0
 fi
-[[ -s $workdir/recommended.txt ]] || error '没有符合条件的推荐域名，已停止安装。'
-IFS= read -r selected < "$workdir/recommended.txt" || error '无法读取推荐域名。'
-[[ $selected =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && $selected == *.* && $selected != *..* ]] || error '推荐域名格式无效，已停止安装。'
+selected='www.apple.com'
+if [[ $scan_ok -eq 1 && -s $workdir/recommended.txt ]]; then
+  IFS= read -r candidate < "$workdir/recommended.txt" || candidate=''
+  if [[ $candidate =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && $candidate == *.* && $candidate != *..* ]]; then
+    selected="$candidate"
+  else
+    printf '推荐域名格式无效，改用默认域名 www.apple.com 安装。\n'
+  fi
+else
+  printf '没有扫到符合条件的推荐域名，改用默认域名 www.apple.com 安装。\n'
+fi
 existing_xray && error '检测到现有 Xray 程序、配置或服务，已停止以免覆盖现有节点。'
-printf '[3/3] 采用推荐域名 %s，开始安装 REALITY...\n' "$selected"
+printf '[3/3] 采用域名 %s，开始安装 REALITY...\n' "$selected"
 curl -fsSL --retry 3 --connect-timeout 15 -o "$workdir/reality" "$base/reality" || error '安装脚本下载失败。'
 REALITY_SNI="$selected" bash "$workdir/reality" install || error 'REALITY 安装失败，请检查上面的错误。'
-printf '安装完成，推荐域名：%s\n' "$selected"
+printf '安装完成，域名：%s\n' "$selected"

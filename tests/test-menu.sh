@@ -103,17 +103,26 @@ bash -c 'source "$1" "$2"; do_install() { printf "%s" "${REALITY_SNI:-}" > "$TMP
 [ "$(cat "$tmp/install-sni.txt")" = "scanned.example.com" ] || { echo "FAIL: 重装用的不是扫描到的域名: $(cat "$tmp/install-sni.txt")"; exit 1; }
 grep -Fq '扫描推荐域名: scanned.example.com' "$tmp/rescan.out" || { echo 'FAIL: 没打印扫描推荐域名'; exit 1; }
 
-# ---- 5) 扫描重装: 扫不到域名就停, 不调安装 ----
+# ---- 5) 扫描重装: 扫不到域名改用 www.apple.com 安装, 不硬停 ----
 cat > "$tmp/scan-neighbors.sh" <<'SCAN'
 #!/usr/bin/env bash
 while [ "$#" -gt 0 ]; do case "$1" in --recommend-file) shift; : > "$1" ;; esac; shift; done
 SCAN
 chmod +x "$tmp/scan-neighbors.sh"
 rm -f "$tmp/install-sni.txt"
-if bash -c 'source "$1" "$2"; do_install() { printf "%s" "${REALITY_SNI:-}" > "$TMPDIR/install-sni.txt"; }; do_rescan_reinstall' "$tmp/reality" "$tmp/harness.sh" "$tmp" "$tmp" > "$tmp/rescan-empty.out" 2>&1; then
-  echo 'FAIL: 没扫到域名, 重装居然继续了'; exit 1
-fi
-[ ! -f "$tmp/install-sni.txt" ] || { echo 'FAIL: 没扫到域名还调了安装'; exit 1; }
+bash -c 'source "$1" "$2"; do_install() { printf "%s" "${REALITY_SNI:-}" > "$TMPDIR/install-sni.txt"; }; do_rescan_reinstall' "$tmp/reality" "$tmp/harness.sh" "$tmp" "$tmp" > "$tmp/rescan-empty.out" 2>&1 || { echo 'FAIL: 扫不到域名时重装退出了'; cat "$tmp/rescan-empty.out"; exit 1; }
+[ "$(cat "$tmp/install-sni.txt")" = "www.apple.com" ] || { echo "FAIL: 回退用的不是 www.apple.com: $(cat "$tmp/install-sni.txt")"; exit 1; }
+grep -Fq '改用默认域名 www.apple.com' "$tmp/rescan-empty.out" || { echo 'FAIL: 没打印回退提示'; cat "$tmp/rescan-empty.out"; exit 1; }
+
+# ---- 5b) 扫描重装: 扫描脚本报错也回退 www.apple.com ----
+cat > "$tmp/scan-neighbors.sh" <<'SCAN'
+#!/usr/bin/env bash
+exit 1
+SCAN
+chmod +x "$tmp/scan-neighbors.sh"
+rm -f "$tmp/install-sni.txt"
+bash -c 'source "$1" "$2"; do_install() { printf "%s" "${REALITY_SNI:-}" > "$TMPDIR/install-sni.txt"; }; do_rescan_reinstall' "$tmp/reality" "$tmp/harness.sh" "$tmp" "$tmp" > "$tmp/rescan-fail.out" 2>&1 || { echo 'FAIL: 扫描报错时重装退出了'; cat "$tmp/rescan-fail.out"; exit 1; }
+[ "$(cat "$tmp/install-sni.txt")" = "www.apple.com" ] || { echo "FAIL: 扫描报错回退用的不是 www.apple.com: $(cat "$tmp/install-sni.txt")"; exit 1; }
 
 # ---- 6) 完全卸载 --purge: 配置、客户端文件、二维码、二进制全删 ----
 touch "$tmp/client.png"

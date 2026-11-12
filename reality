@@ -72,7 +72,7 @@
 #   REALITY_REGEN_UUID=1 同时换 UUID。
 # 只换端口用 bash reality change-port (菜单 3), 非交互: REALITY_PORT=新端口 bash reality change-port。
 # 扫描邻居域名并重装用 bash reality rescan (菜单 2): 扫本机所在 /23, 挑握手最快
-# 的合格域名做新 dest/SNI, UUID/密钥/端口不变; 扫不到合格域名就停, 现有节点不动。
+# 的合格域名做新 dest/SNI, UUID/密钥/端口不变; 扫不到合格域名改用 www.apple.com 安装。
 #
 set -u
 export LC_ALL=C
@@ -86,6 +86,9 @@ CLIENT_PNG="${CLIENT_FILE%.txt}.png"
 SERVICE_NAME="xray"
 FALLBACK_VERSION="v26.10.31"
 DEFAULT_SNI="www.amazon.com"
+# 扫描回退域名 (用户要求, 2026-11-12): rescan / 自动安装扫不到合格域名时不再停下,
+# 改用它安装; 平时单独安装、回车默认的仍是上面的 www.amazon.com
+FALLBACK_SNI="www.apple.com"
 DEFAULT_PORT="443"
 # Cloudflare 官方反代端口 (developers.cloudflare.com/fundamentals/reference/network-ports)
 CF_HTTP_PORTS="80 8080 8880 2052 2082 2086 2095"
@@ -831,23 +834,29 @@ do_rescan_reinstall() { # 扫描邻居域名并重装: 只换 dest/SNI, UUID/密
     curl -fsSL --retry 3 --connect-timeout 15 -o "$scan_script" "https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/scan-neighbors.sh" || { rm -rf "$scan_workdir"; die "扫描脚本下载失败, 检查 VPS 到 GitHub 的网络"; }
   fi
   info "开始扫描本机所在 /23 的邻居域名 (要几分钟, 扫完按握手延迟推荐)..."
+  # 扫不到合格域名不硬停: 改用默认域名安装 (用户要求, 2026-11-12)。
+  # 扫描失败、推荐文件为空、推荐值为空, 三种情况都回退, 并在输出里明说。
+  local scan_ok=1
   if ! (cd "$scan_workdir" && bash "$scan_script" --recommend-file "$recommend_file"); then
-    rm -rf "$scan_workdir"
-    die "扫描失败, 域名没换, 现有节点没动"
+    scan_ok=0
   fi
-  if [ ! -s "$recommend_file" ]; then
-    rm -rf "$scan_workdir"
-    die "没有符合条件的推荐域名, 域名没换, 现有节点没动 (换个网段再扫, 或用 REALITY_SNI=域名 手动装)"
+  if [ "$scan_ok" -eq 1 ] && [ -s "$recommend_file" ]; then
+    recommended="$(head -1 "$recommend_file" | tr -d ' \t\r\n')"
+  else
+    recommended=""
   fi
-  recommended="$(head -1 "$recommend_file" | tr -d ' \t\r\n')"
   rm -rf "$scan_workdir"
-  [ -n "$recommended" ] || die "推荐域名为空, 域名没换, 现有节点没动"
-  info "扫描推荐域名: $recommended"
+  if [ -n "$recommended" ]; then
+    info "扫描推荐域名: $recommended"
+  else
+    recommended="$FALLBACK_SNI"
+    warn "没扫到符合条件的推荐域名, 改用默认域名 $recommended 安装 (想换邻居域名可手动扫别的网段, 再用 REALITY_SNI=域名 重装)"
+  fi
   validate_sni "$recommended"
   # 重装: 已有配置的 UUID/私钥/端口/shortId 全部保留, 只换 SNI;
   # 没装过就是全新安装, 用扫描到的域名做 dest/SNI
   REALITY_SNI="$recommended" do_install "$@"
-  info "已用扫描到的域名 $recommended 重装, 旧域名对应的客户端配置作废, 请用上面新的"
+  info "已用域名 $recommended 重装, 旧域名对应的客户端配置作废, 请用上面新的"
 }
 
 do_reconfig() {
@@ -1014,7 +1023,7 @@ case "${1:-}" in
     printf '%s\n' "用法: bash reality [install|show|rescan|change-port|reconfig|update|restart|status|uninstall [--purge]]"
     printf '%s\n' "无参数时: 有终端进菜单 (1 查看配置 / 2 扫描重装 / 3 换端口 / 4 完全卸载), 无终端 (管道/重定向) 直接安装"
     printf '%s\n' "show: 输出 Surge 行 + QuanX 行 + vless:// 链接 + 二维码"
-    printf '%s\n' "rescan: 扫描邻居网段, 用推荐域名重装 (只换 dest/SNI, UUID/密钥/端口不变; 扫不到就停)"
+    printf '%s\n' "rescan: 扫描邻居网段, 用推荐域名重装 (只换 dest/SNI, UUID/密钥/端口不变; 扫不到改用 www.apple.com)"
     printf '%s\n' "change-port: 只换端口, 域名/密钥不变; 非交互用 REALITY_PORT=新端口 bash reality change-port"
     printf '%s\n' "reconfig: 改伪装域名 / 端口 / 重新生成密钥, 旧的客户端配置作废"
     printf '%s\n' "uninstall: 只卸程序、保留配置; uninstall --purge: 彻底卸载, 配置/客户端文件/二维码一起删"

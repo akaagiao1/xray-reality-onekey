@@ -37,7 +37,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 REALITY_SNI=挑到的域名 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality) install
 ```
 
-扫不到合格域名时直接停下，**不会**退回默认域名装；机器上已有 Xray 时也会停下，以免覆盖现有节点。扫描只针对有权扫描的网段，VPS 上扫描可能被标记。
+扫不到合格域名时不硬停，改用 `www.apple.com` 直接装，并在输出里明说；机器上已有 Xray 时也会停下，以免覆盖现有节点。扫描只针对有权扫描的网段，VPS 上扫描可能被标记。
 
 ## 菜单与命令行
 
@@ -50,7 +50,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 | 菜单 | 作用 |
 | --- | --- |
 | 1. 查看客户端配置 | Surge 行 + QuanX 行 + vless:// 链接 + 二维码 |
-| 2. 重新安装并扫描 Reality 域名 | 扫本机 /23 邻居域名，用握手最快的合格域名重装，只换 dest / SNI，UUID、密钥、端口不变；扫不到就停，现有节点不动 |
+| 2. 重新安装并扫描 Reality 域名 | 扫本机 /23 邻居域名，用握手最快的合格域名重装，只换 dest / SNI，UUID、密钥、端口不变；扫不到合格域名改用 `www.apple.com` 安装 |
 | 3. 更换 Reality 端口 | 只换端口，域名、UUID、密钥、shortId 不变，同样过 CF 端口和占用检查 |
 | 4. 完全卸载 | 删 Xray 程序、服务、配置、客户端文件和二维码，须输入 `yes` 才执行 |
 
@@ -146,7 +146,7 @@ REALITY_HOST=example.com bash reality install
 
 - **报“检测到现有 Xray”**：机器上已有节点，怕覆盖直接停了。确认不要旧节点后先卸载再装：`bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality) uninstall --purge`（一键命令是管道执行，`reality` 没落盘，卸载也要用 curl 写法）。
 - **`--csv` 报“CSV 文件不存在”**：`--csv` 后面必须是已扫出来的 `file.csv`，先跑一遍扫描生成它。
-- **扫描 0 行 / 没有推荐域名**：这个网段没扫到东西，或扫到的没通过筛选。换个网段再扫（如相邻 /24），或用已验证的域名手动装。
+- **扫描 0 行 / 没有推荐域名**：这个网段没扫到东西，或扫到的没通过筛选。全自动安装和扫描重装会直接用 `www.apple.com` 装；想用邻居域名就换个网段再扫（如相邻 /24），或用已验证的域名手动装（`REALITY_SNI=域名`）。
 - **QuanX 显示节点但连不上**：确认 QuanX ≥ 1.5.5，确认粘贴的是脚本输出的 QuanX 行（不是只导了链接），`obfs-host` / `reality-base64-pubkey` / `reality-hex-shortid` / `vless-flow` 一个都不能少。
 - **Alpine 上服务起不来**：看 `rc-service xray status`，确认 `rc-update show` 里 `xray` 在 default 运行级。
 - **Alpine 上没有二维码**：二维码命令行在 `libqrencode-tools` 包里，不在 `qrencode` 里；脚本已改成装 `libqrencode-tools`，装好后跑 `bash reality show` 可补生成。
