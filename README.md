@@ -50,7 +50,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 | 菜单 | 作用 |
 | --- | --- |
 | 1. 查看客户端配置 | Surge 行 + QuanX 行 + vless:// 链接 + 二维码 |
-| 2. 重新安装并扫描 Reality 域名 | 扫本机 /23 邻居域名，用握手最快的合格域名重装，只换 dest / SNI，UUID、密钥、端口不变；扫不到合格域名改用 `www.apple.com` 安装 |
+| 2. 重新安装并扫描 Reality 域名 | 按本机 /23 → 相邻上段 /23 → 相邻下段 /23 的优先级扫邻居域名，哪个先扫到合格域名就用哪个重装，只换 dest / SNI，UUID、密钥、端口不变；都扫不到改用 `www.apple.com` 安装 |
 | 3. 更换 Reality 端口 | 只换端口，域名、UUID、密钥、shortId 不变，同样过 CF 端口和占用检查 |
 | 4. 完全卸载 | 删 Xray 程序、服务、配置、客户端文件和二维码，须输入 `yes` 才执行 |
 
@@ -121,6 +121,7 @@ vless://<UUID>@<服务器IP>:443?encryption=none&flow=xtls-rprx-vision&security=
 | --- | --- |
 | `REALITY_PORT` | 端口，默认 443，如 `REALITY_PORT=24443`（别用 CF 反代端口） |
 | `REALITY_SNI` | 伪装域名（dest 与 serverNames 同值），默认 `www.amazon.com` |
+| `REALITY_SCAN_CIDRS` | 扫描范围优先级，逗号或空格分隔，如 `154.9.238.0/23,154.9.234.0/23`；不指定则按本机 /23 → 相邻上段 → 相邻下段的顺序扫 |
 | `REALITY_TAG` | 节点名，指定后三处都用它，不指定则按 IP 所在地自动生成 |
 | `REALITY_HOST` | 客户端填的地址，默认自动探测公网 IP，也可填域名 |
 | `REALITY_UUID` / `XRAY_VERSION` | 指定 UUID / Xray 版本，不指定则随机生成 / 取 GitHub 最新版 |

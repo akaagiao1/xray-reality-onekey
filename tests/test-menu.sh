@@ -170,4 +170,34 @@ bash -c '
   printf "%s\n" "自动换端口范围测试通过"
 ' _ "$tmp/harness.sh" "$tmp" || exit 1
 
+# ---- 10) 扫描优先级: 本机 /23 → 相邻上段 → 相邻下段, 第一个有结果的胜出 ----
+bash -c '
+  source "$1" "$2"
+  [ "$(scan_ranges 154.9.236.158 | tr "\n" " ")" = "154.9.236.0/23 154.9.238.0/23 154.9.234.0/23 " ] || { echo "FAIL: 236.158 的范围不对: $(scan_ranges 154.9.236.158 | tr "\n" " ")"; exit 1; }
+  [ "$(scan_ranges 10.0.0.5 | tr "\n" " ")" = "10.0.0.0/23 10.0.2.0/23 " ] || { echo "FAIL: 边界 0 没去掉下段: $(scan_ranges 10.0.0.5 | tr "\n" " ")"; exit 1; }
+  [ "$(scan_ranges 10.0.254.9 | tr "\n" " ")" = "10.0.254.0/23 10.1.0.0/23 10.0.252.0/23 " ] || { echo "FAIL: 边界 254 进位不对: $(scan_ranges 10.0.254.9 | tr "\n" " ")"; exit 1; }
+  printf "%s\n" "扫描范围计算测试通过"
+' _ "$tmp/harness.sh" "$tmp" || exit 1
+cat > "$tmp/scan-neighbors.sh" <<'SCAN'
+#!/usr/bin/env bash
+# 第一个参数是网段: 记下来; 只有扫到 203.0.114.0/23 才给推荐域名
+cidr="$1"
+printf '%s\n' "$cidr" >> "$TMPDIR/tried.txt"
+while [ "$#" -gt 0 ]; do case "$1" in --recommend-file) shift; f="$1" ;; esac; shift; done
+if [ "$cidr" = "203.0.114.0/23" ]; then printf '%s\n' 'second.example.com' > "$f"; else : > "$f"; fi
+SCAN
+chmod +x "$tmp/scan-neighbors.sh"
+rm -f "$tmp/install-sni.txt" "$tmp/tried.txt"
+bash -c 'source "$1" "$2"; do_install() { printf "%s" "${REALITY_SNI:-}" > "$TMPDIR/install-sni.txt"; }; do_rescan_reinstall' "$tmp/reality" "$tmp/harness.sh" "$tmp" "$tmp" > "$tmp/rescan-prio.out" 2>&1 || { echo 'FAIL: 优先级扫描退出了'; cat "$tmp/rescan-prio.out"; exit 1; }
+[ "$(cat "$tmp/install-sni.txt")" = "second.example.com" ] || { echo "FAIL: 用的不是第二个网段的域名: $(cat "$tmp/install-sni.txt")"; exit 1; }
+[ "$(head -1 "$tmp/tried.txt")" = "203.0.112.0/23" ] || { echo "FAIL: 第一个扫的不是本机 /23: $(head -1 "$tmp/tried.txt")"; exit 1; }
+[ "$(sed -n '2p' "$tmp/tried.txt")" = "203.0.114.0/23" ] || { echo "FAIL: 第二个扫的不是相邻上段: $(sed -n '2p' "$tmp/tried.txt")"; exit 1; }
+[ "$(wc -l < "$tmp/tried.txt")" = "2" ] || { echo 'FAIL: 扫到域名后没停下'; cat "$tmp/tried.txt"; exit 1; }
+# REALITY_SCAN_CIDRS 覆盖默认顺序: 两个指定网段都没结果就回退 www.apple.com
+rm -f "$tmp/install-sni.txt" "$tmp/tried.txt"
+REALITY_SCAN_CIDRS='10.9.8.0/23,10.9.10.0/23' bash -c 'source "$1" "$2"; do_install() { printf "%s" "${REALITY_SNI:-}" > "$TMPDIR/install-sni.txt"; }; do_rescan_reinstall' "$tmp/reality" "$tmp/harness.sh" "$tmp" "$tmp" > "$tmp/rescan-override.out" 2>&1 || { echo 'FAIL: 指定网段扫描退出了'; cat "$tmp/rescan-override.out"; exit 1; }
+[ "$(cat "$tmp/tried.txt" | tr '\n' ' ')" = "10.9.8.0/23 10.9.10.0/23 " ] || { echo "FAIL: 没按指定的顺序扫: $(cat "$tmp/tried.txt" | tr '\n' ' ')"; exit 1; }
+[ "$(cat "$tmp/install-sni.txt")" = "www.apple.com" ] || { echo "FAIL: 指定网段扫完没回退: $(cat "$tmp/install-sni.txt")"; exit 1; }
+printf '%s\n' '扫描优先级测试通过'
+
 printf '%s\n' '菜单、换端口、扫描重装、完全卸载测试全部通过'

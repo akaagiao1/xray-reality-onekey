@@ -4,7 +4,7 @@ set -Eeuo pipefail
 error() { printf '[错误] %s\n' "$*" >&2; exit 1; }
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
   printf '%s\n' '用法: bash auto-reality.sh [--csv 已有扫描结果.csv]' \
-    '默认在本机扫描公网 IPv4 所在 /23；--csv 使用已有扫描结果。' \
+    '默认按本机 /23 → 相邻上段 /23 → 相邻下段 /23 的优先级扫描；--csv 使用已有扫描结果。' \
     '扫不到合格候选时改用 www.apple.com 安装；已有 Xray 配置时停止，不覆盖。'
   exit 0
 fi
@@ -46,26 +46,63 @@ trap 'rm -rf -- "$workdir"' EXIT
 base='https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/c49797891bb9eb2729de7def189b57d75f694f5d'
 printf '[1/3] 下载扫描脚本...\n'
 curl -fsSL --retry 3 --connect-timeout 15 -o "$workdir/scan-neighbors.sh" "$base/scan-neighbors.sh" || error '扫描脚本下载失败。'
+public_ip() {
+  local ip=""
+  ip="$(curl -4fsSL --max-time 8 https://ifconfig.me 2>/dev/null | tr -d ' \r\n')" || true
+  [[ -n $ip ]] || ip="$(curl -4fsSL --max-time 8 https://api.ipify.org 2>/dev/null | tr -d ' \r\n')" || true
+  printf '%s' "$ip"
+}
+scan_ranges() { # $1=本机公网 IPv4 ; 按优先级输出: 本机 /23、相邻上段 /23、相邻下段 /23
+  local ip="$1" a b c rest e b_up c_up b_down c_down
+  a="${ip%%.*}"; rest="${ip#*.}"; b="${rest%%.*}"; rest="${rest#*.}"; c="${rest%%.*}"
+  a=$((10#$a)); b=$((10#$b)); c=$((10#$c))
+  e=$(( (c / 2) * 2 ))
+  b_up="$b"; c_up=$((e + 2))
+  if (( c_up > 254 )); then c_up=0; b_up=$((b_up + 1)); fi
+  b_down="$b"; c_down=$((e - 2))
+  if (( c_down < 0 )); then c_down=254; b_down=$((b_down - 1)); fi
+  printf '%s.%s.%s.0/23\n' "$a" "$b" "$e"
+  if (( b_up <= 255 )); then printf '%s.%s.%s.0/23\n' "$a" "$b_up" "$c_up"; fi
+  if (( b_down >= 0 )); then printf '%s.%s.%s.0/23\n' "$a" "$b_down" "$c_down"; fi
+}
 printf '[2/3] 扫描和筛选候选域名...\n'
-# 扫不到合格域名不硬停: 改用默认域名安装 (用户要求, 2026-11-12)。
-# 扫描失败、推荐文件为空、推荐值格式无效, 三种情况都回退, 并在输出里明说。
-scan_ok=1
-if [[ -n $csv ]]; then
-  (cd "$workdir" && bash ./scan-neighbors.sh --csv "$csv" --recommend-file "$workdir/recommended.txt") || scan_ok=0
-else
-  printf '注意：将从本机扫描公网 IP 所在的 /23；仅扫描获授权的网段。\n'
-  (cd "$workdir" && bash ./scan-neighbors.sh --recommend-file "$workdir/recommended.txt") || scan_ok=0
-fi
+# 扫描范围优先级 (用户要求, 2026-11-12): 本机 /23 → 相邻上段 /23 → 相邻下段 /23,
+# 哪个先扫到合格域名就用哪个; REALITY_SCAN_CIDRS 指定了就按指定的顺序扫。
+# 扫不到改用默认域名安装, 不硬停。
 selected='www.apple.com'
-if [[ $scan_ok -eq 1 && -s $workdir/recommended.txt ]]; then
-  IFS= read -r candidate < "$workdir/recommended.txt" || candidate=''
+if [[ -n $csv ]]; then
+  (cd "$workdir" && bash ./scan-neighbors.sh --csv "$csv" --recommend-file "$workdir/recommended.txt") || true
+  candidate="$(head -1 "$workdir/recommended.txt" 2>/dev/null | tr -d ' \t\r\n')"
   if [[ $candidate =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && $candidate == *.* && $candidate != *..* ]]; then
     selected="$candidate"
   else
-    printf '推荐域名格式无效，改用默认域名 www.apple.com 安装。\n'
+    printf '没有扫到符合条件的推荐域名，改用默认域名 www.apple.com 安装。\n'
   fi
 else
-  printf '没有扫到符合条件的推荐域名，改用默认域名 www.apple.com 安装。\n'
+  printf '注意：将按优先级扫描本机 /23 及相邻网段；仅扫描获授权的网段。\n'
+  ranges=()
+  if [[ -n ${REALITY_SCAN_CIDRS:-} ]]; then
+    ranges=(${REALITY_SCAN_CIDRS//,/ })
+  else
+    ip="$(public_ip)"
+    [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || error '探测不到本机公网 IP, 请用 REALITY_SCAN_CIDRS=网段 指定扫描范围。'
+    mapfile -t ranges < <(scan_ranges "$ip")
+  fi
+  [[ ${#ranges[@]} -gt 0 ]] || error '没有可用扫描网段，请检查 REALITY_SCAN_CIDRS。'
+  found=0
+  for cidr in "${ranges[@]}"; do
+    printf '扫描网段 %s...\n' "$cidr"
+    rm -f "$workdir/recommended.txt"
+    if (cd "$workdir" && bash ./scan-neighbors.sh "$cidr" --recommend-file "$workdir/recommended.txt"); then
+      candidate="$(head -1 "$workdir/recommended.txt" 2>/dev/null | tr -d ' \t\r\n')"
+      if [[ $candidate =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ && $candidate == *.* && $candidate != *..* ]]; then
+        selected="$candidate"; found=1; break
+      fi
+    fi
+  done
+  if [[ $found -eq 0 ]]; then
+    printf '没有扫到符合条件的推荐域名，改用默认域名 www.apple.com 安装。\n'
+  fi
 fi
 existing_xray && error '检测到现有 Xray 程序、配置或服务，已停止以免覆盖现有节点。'
 printf '[3/3] 采用域名 %s，开始安装 REALITY...\n' "$selected"
