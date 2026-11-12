@@ -3,10 +3,11 @@
 #
 # 用法:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/<repo>/main/reality)
-#   bash reality install | reconfig | uninstall [--purge] | update | restart | status | show
+#   bash reality install | reconfig | show | rescan | change-port | update | restart | status | uninstall [--purge]
 #   安装时有终端会问伪装域名, 回车默认 www.amazon.com, 也可自己填 (如 heiheiai.shop);
-#   二次运行: bash reality 进菜单可 卸载 / 改域名 / 改端口 / 换密钥;
-#   安装完自动输出 QuanX 行 + vless:// 链接 + 二维码 (终端打印 + PNG 文件)。
+#   二次运行: bash reality 进菜单, 4 个选项: 1 查看 Surge/QuanX/vless 2 扫描域名重装
+#   3 换端口 4 完全卸载; 安装完自动输出 Surge 行 + QuanX 行 + vless:// 链接 + 二维码
+#   (终端打印 + PNG 文件)。
 #
 # 兼容: Debian 11/12/13, Ubuntu 20.04/22.04/24.04, Alpine Linux (OpenRC)
 # 服务端: Xray-core (默认最新版, 失败时回落到已验证的 v26.10.31)
@@ -23,6 +24,12 @@
 #     会被忽略, 且 Client Hello 超 1500 字节, 所以绝不能开 TCP Fast Open
 #     —— 脚本输出的 QuanX 行里 deliberately 不带 fast-open, 服务端也不开
 #   - shortId 固定 16 位 hex (8 字节), 与官方示例 0123456789abcdef 同长
+#
+# Surge 也支持 (iOS 6.0.0+ / Mac 6.12.0+, 官方 VLESS 文档):
+#   - Surge 行按官方写法: vless, <host>, <port>, username=<UUID>,
+#     flow=xtls-rprx-vision, sni=<SNI>, reality-public-key=<公钥>,
+#     reality-short-id=<shortId>; REALITY 下不用再加 tls=true, UDP relay 默认启用
+#   - 低版本 Surge 没有 VLESS, 贴过去不识别, 请先升级客户端再用 Surge 行
 #
 # 防 CF / 防偷流量 (用户明确要求, 2026-11-06):
 #   - 端口: 默认 443 保留 (Reality 必须冒充 443 上的真站, 且直连 VPS IP、
@@ -50,9 +57,12 @@
 #   REALITY_HOST   客户端填的地址, 默认自动探测公网 IP, 也可填域名
 #   REALITY_UUID   指定 UUID, 不指定则随机生成
 #   XRAY_VERSION   指定 Xray 版本, 如 v26.10.31; 不指定则取 GitHub 最新版
-# 改配置用 bash reality reconfig (菜单 6), 非交互时可用:
+# 改配置用 bash reality reconfig (命令行, 不在菜单里), 非交互时可用:
 #   REALITY_SNI / REALITY_PORT 指定新值, REALITY_REGEN_KEYS=1 换密钥+shortId,
 #   REALITY_REGEN_UUID=1 同时换 UUID。
+# 只换端口用 bash reality change-port (菜单 3), 非交互: REALITY_PORT=新端口 bash reality change-port。
+# 扫描邻居域名并重装用 bash reality rescan (菜单 2): 扫本机所在 /23, 挑握手最快
+# 的合格域名做新 dest/SNI, UUID/密钥/端口不变; 扫不到合格域名就停, 现有节点不动。
 #
 set -u
 export LC_ALL=C
@@ -691,6 +701,82 @@ do_show() {
   show_info "$uuid" "$pub" "$shortid" "$port" "$sni"
 }
 
+do_change_port() { # 只换端口: 域名/UUID/密钥/shortId 全不变, 旧端口的客户端配置作废
+  need_root "$@"
+  [ -f "$CONFIG_FILE" ] || die "还没安装, 配置 $CONFIG_FILE 不存在, 先跑 bash reality install"
+  [ -n "${REALITY_PORT:-}" ] && validate_port "$REALITY_PORT"
+  detect_os; install_deps; detect_init
+  [ -x "$XRAY_BIN" ] || download_xray
+
+  local old_port old_sni old_uuid old_priv old_shortid pub
+  old_port="$(existing_value port)"; old_sni="$(existing_value sni)"
+  old_uuid="$(existing_value uuid)"; old_priv="$(existing_value priv)"
+  old_shortid="$(existing_value shortid)"
+  [ -n "$old_uuid" ] && [ -n "$old_priv" ] && [ -n "$old_port" ] || die "配置不完整, 请删配置重装"
+
+  local new_port="${REALITY_PORT:-}" ans=""
+  if [ -t 0 ]; then
+    printf '%s\n' "当前配置: 域名 $old_sni  端口 $old_port"
+    printf '新端口 (回车保持 %s, 别用 CF 反代端口): ' "$old_port"; read -r ans
+    [ -n "$ans" ] && new_port="$ans"
+  fi
+  [ -n "$new_port" ] || new_port="$old_port"
+  if [ "$new_port" = "$old_port" ]; then info "端口没变, 仍是 $old_port"; do_show; return 0; fi
+  validate_port "$new_port"
+  if port_in_use "$new_port" && ! port_owner_is_xray "$new_port"; then
+    die "端口 $new_port 已被占用, 请换一个未占用的端口"
+  fi
+  pub="$("$XRAY_BIN" x25519 -i "$old_priv" 2>/dev/null | extract_xray_public)"
+  [ -n "$pub" ] || die "私钥无法反推公钥, 请检查配置"
+
+  write_config "$old_uuid" "$old_priv" "$old_shortid" "$new_port" "$old_sni"
+  stop_service
+  start_service
+  service_active || die "换端口后 Xray 未运行, 查日志: systemd 用 journalctl -u xray -n 50; OpenRC 用 rc-service xray status"
+  open_firewall "$new_port"
+  warn "旧端口 $old_port 的防火墙/安全组规则仍在, 不用了请手动关掉"
+  try_bbr
+  info "端口已改: $old_port -> $new_port (域名、UUID、密钥、shortId 都没变, 只换端口)"
+  show_info "$old_uuid" "$pub" "$old_shortid" "$new_port" "$old_sni"
+}
+
+do_rescan_reinstall() { # 扫描邻居域名并重装: 只换 dest/SNI, UUID/密钥/端口不变
+  need_root "$@"
+  detect_os; install_deps; detect_init
+
+  # 扫描脚本: 同目录有就用它 (git clone 下来的仓库里就有), 否则从仓库 main 现下
+  local script_dir scan_script scan_workdir recommended recommend_file
+  script_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+  case "$script_dir" in /dev/fd*|/proc/self/fd*) script_dir="" ;; esac
+  scan_workdir="$(mktemp -d "${TMPDIR:-/tmp}/reality-rescan.XXXXXXXX")" || die "创建临时目录失败"
+  recommend_file="$scan_workdir/recommended.txt"
+  if [ -n "$script_dir" ] && [ -f "$script_dir/scan-neighbors.sh" ]; then
+    scan_script="$script_dir/scan-neighbors.sh"
+  else
+    scan_script="$scan_workdir/scan-neighbors.sh"
+    info "下载扫描脚本..."
+    curl -fsSL --retry 3 --connect-timeout 15 -o "$scan_script" "https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/scan-neighbors.sh" || { rm -rf "$scan_workdir"; die "扫描脚本下载失败, 检查 VPS 到 GitHub 的网络"; }
+  fi
+  info "开始扫描本机所在 /23 的邻居域名 (要几分钟, 扫完按握手延迟推荐)..."
+  if ! (cd "$scan_workdir" && bash "$scan_script" --recommend-file "$recommend_file"); then
+    rm -rf "$scan_workdir"
+    die "扫描失败, 域名没换, 现有节点没动"
+  fi
+  if [ ! -s "$recommend_file" ]; then
+    rm -rf "$scan_workdir"
+    die "没有符合条件的推荐域名, 域名没换, 现有节点没动 (换个网段再扫, 或用 REALITY_SNI=域名 手动装)"
+  fi
+  recommended="$(head -1 "$recommend_file" | tr -d ' \t\r\n')"
+  rm -rf "$scan_workdir"
+  [ -n "$recommended" ] || die "推荐域名为空, 域名没换, 现有节点没动"
+  info "扫描推荐域名: $recommended"
+  validate_sni "$recommended"
+  # 重装: 已有配置的 UUID/私钥/端口/shortId 全部保留, 只换 SNI;
+  # 没装过就是全新安装, 用扫描到的域名做 dest/SNI
+  REALITY_SNI="$recommended" do_install "$@"
+  info "已用扫描到的域名 $recommended 重装, 旧域名对应的客户端配置作废, 请用上面新的"
+}
+
 do_reconfig() {
   need_root "$@"
   [ -f "$CONFIG_FILE" ] || die "还没安装, 配置 $CONFIG_FILE 不存在, 先跑 bash reality install"
@@ -758,6 +844,9 @@ do_reconfig() {
 do_uninstall() {
   need_root "$@"
   detect_os; detect_init
+  local purge=0 a old_port=""
+  for a in "$@"; do [ "$a" = "--purge" ] && purge=1; done
+  [ -f "$CONFIG_FILE" ] && old_port="$(existing_value port)"
   stop_service
   case "$INIT" in
     systemd)
@@ -771,8 +860,11 @@ do_uninstall() {
       ;;
   esac
   rm -f "$XRAY_BIN"
-  if [ "${2:-}" = "--purge" ]; then
-    rm -rf "$CONFIG_DIR" "$CLIENT_FILE" "$CLIENT_PNG"
+  if [ "$purge" = "1" ]; then
+    rm -rf "$CONFIG_DIR" "$CLIENT_FILE" "$CLIENT_PNG" /usr/local/share/xray
+    if [ -n "$old_port" ] && command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'active'; then
+      ufw delete allow "$old_port/tcp" >/dev/null 2>&1 || true
+    fi
     info "已彻底卸载 (含配置、客户端文件与二维码)"
   else
     info "已卸载程序, 配置保留在 $CONFIG_FILE, 重装会继续用它"
@@ -802,40 +894,57 @@ do_status() {
 }
 
 menu() {
-  printf '%s\n' "Xray VLESS + REALITY (Surge / QuanX) 一键脚本"
-  printf '%s\n' "  1) 安装 / 重装 (会问伪装域名, 回车保持当前)"
-  printf '%s\n' "  2) 查看客户端配置 (Surge / QuanX / vless://)"
-  printf '%s\n' "  3) 更新 Xray 到最新版"
-  printf '%s\n' "  4) 重启服务"
-  printf '%s\n' "  5) 卸载 (保留配置)"
-  printf '%s\n' "  6) 更改配置 (域名 / 端口 / 密钥, 旧配置作废)"
-  printf '%s\n' "  0) 退出"
-  printf '请选择 [1-6/0]: '
-  read -r choice
-  case "$choice" in
-    1) do_install "$@" ;;
-    2) do_show ;;
-    3) do_update "$@" ;;
-    4) need_root "$@"; detect_init; start_service; service_active && info "服务已重启" || die "重启失败" ;;
-    5) do_uninstall "$@" ;;
-    6) do_reconfig "$@" ;;
-    0) exit 0 ;;
-    *) die "无效选择: $choice" ;;
-  esac
+  # 安装完 / 二次运行都进这个菜单, 选完一项后回到菜单, 直到选 0 退出
+  while true; do
+    printf '%s\n' "Xray VLESS + REALITY (Surge / QuanX) 一键脚本"
+    if [ -f "$CONFIG_FILE" ]; then
+      printf '%s\n' "  已安装: 域名 $(existing_value sni)  端口 $(existing_value port)"
+    else
+      printf '%s\n' "  还没安装: 选 2 扫描域名并安装, 或用 bash reality install 直接装"
+    fi
+    printf '%s\n' "  1) 查看客户端配置 (Surge / QuanX / vless://)"
+    printf '%s\n' "  2) 重新安装并扫描 Reality 域名 (扫邻居网段, 只换 dest/SNI)"
+    printf '%s\n' "  3) 更换 Reality 端口 (只换端口, 域名/密钥不变)"
+    printf '%s\n' "  4) 完全卸载 (删程序 + 配置 + 客户端文件, 需确认)"
+    printf '%s\n' "  0) 退出"
+    printf '请选择 [1-4/0]: '
+    read -r choice || exit 0
+    case "$choice" in
+      1) do_show ;;
+      2) do_rescan_reinstall "$@" ;;
+      3) do_change_port "$@" ;;
+      4) printf '完全卸载会删掉 Xray 程序、服务、配置、客户端文件和二维码, 旧节点彻底作废。输入 yes 确认: '
+         read -r ans
+         case "$ans" in
+           yes|YES) do_uninstall "$@" --purge ;;
+           *) info "已取消, 什么都没删" ;;
+         esac
+         ;;
+      0) exit 0 ;;
+      *) warn "无效选择: $choice, 请选 1-4 或 0" ;;
+    esac
+    printf '%s\n' ""
+  done
 }
 
 case "${1:-}" in
   install|"") [ -n "${1:-}" ] || { [ -t 0 ] && menu "$@" || do_install "$@"; exit 0; }; do_install "$@" ;;
   show|info) do_show ;;
+  rescan|scan) do_rescan_reinstall "$@" ;;
+  change-port|changeport) do_change_port "$@" ;;
   reconfig|change) do_reconfig "$@" ;;
   update|upgrade) do_update "$@" ;;
   restart) need_root "$@"; detect_init; start_service; service_active && info "服务已重启" || die "重启失败" ;;
   status) do_status ;;
   uninstall|remove) do_uninstall "$@" ;;
   -h|--help|help)
-    printf '%s\n' "用法: bash reality [install|reconfig|show|update|restart|status|uninstall [--purge]]"
-    printf '%s\n' "无参数时: 有终端进菜单, 无终端 (管道/重定向) 直接安装"
+    printf '%s\n' "用法: bash reality [install|show|rescan|change-port|reconfig|update|restart|status|uninstall [--purge]]"
+    printf '%s\n' "无参数时: 有终端进菜单 (1 查看配置 / 2 扫描重装 / 3 换端口 / 4 完全卸载), 无终端 (管道/重定向) 直接安装"
+    printf '%s\n' "show: 输出 Surge 行 + QuanX 行 + vless:// 链接 + 二维码"
+    printf '%s\n' "rescan: 扫描邻居网段, 用推荐域名重装 (只换 dest/SNI, UUID/密钥/端口不变; 扫不到就停)"
+    printf '%s\n' "change-port: 只换端口, 域名/密钥不变; 非交互用 REALITY_PORT=新端口 bash reality change-port"
     printf '%s\n' "reconfig: 改伪装域名 / 端口 / 重新生成密钥, 旧的客户端配置作废"
+    printf '%s\n' "uninstall: 只卸程序、保留配置; uninstall --purge: 彻底卸载, 配置/客户端文件/二维码一起删"
     printf '%s\n' "安装时有终端会提示自选伪装域名, 回车保持默认/当前; 非交互用 REALITY_SNI=域名指定"
     printf '%s\n' "环境变量: REALITY_PORT REALITY_SNI REALITY_TAG REALITY_HOST REALITY_UUID XRAY_VERSION"
     printf '%s\n' "改配置非交互: REALITY_SNI=.. REALITY_PORT=.. REALITY_REGEN_KEYS=1 REALITY_REGEN_UUID=1 bash reality reconfig"

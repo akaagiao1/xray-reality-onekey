@@ -56,7 +56,7 @@ REALITY_SNI=挑到的域名 bash <(curl -fsSL https://raw.githubusercontent.com/
 | --- | --- | --- |
 | `auto-reality.sh` | 扫描邻居网段 → 筛选推荐域名 → 直接装好节点 | 新机器，想一步到位 |
 | `scan-neighbors.sh` | 只扫描和筛选，输出 `file.csv` + 推荐域名 | 只想挑域名，或先看一眼再决定 |
-| `reality` | 安装 / 查看 / 改配置 / 更新 / 卸载节点 | 直接装（默认域名），或管理已有节点 |
+| `reality` | 安装 / 查看 / 扫描重装 / 换端口 / 更新 / 卸载节点 | 直接装（默认域名），或管理已有节点 |
 
 三个脚本都是一行命令跑，不用先下载。`reality` 有终端时进菜单，无终端（管道）时直接安装。
 
@@ -134,15 +134,26 @@ bash scan-neighbors.sh --dry-run 154.9.236.158
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality)
 ```
 
-无终端（管道）时直接安装；有终端时进菜单：安装 / 查看配置 / 更新 / 重启 / 卸载 / 更改配置（域名、端口、密钥）。
+无终端（管道）时直接安装；有终端时进菜单，选完一项回到菜单，直到选 0 退出：
+
+1. **查看客户端配置** — Surge 行 + QuanX 行 + vless:// 链接 + 二维码
+2. **重新安装并扫描 Reality 域名** — 扫本机所在 /23 的邻居域名，用握手最快的合格域名重装，只换 dest/SNI，UUID / 密钥 / 端口不变；扫不到合格域名就停，现有节点不动
+3. **更换 Reality 端口** — 只换端口，域名 / UUID / 密钥 / shortId 都不变；新端口同样过 CF 反代端口和占用检查
+4. **完全卸载** — 删 Xray 程序、服务、配置、客户端文件和二维码，菜单里要输入 `yes` 才执行
 
 安装时会问伪装域名（Reality dest/SNI）：新安装时应填写筛选出的邻居域名；如果直接回车，单独安装脚本当前会回退到 `www.amazon.com`。填了 CF 的站、或解析到 CF IP 的站会被拒绝并重问（最多 3 次）；非交互安装（管道）不提问，用环境变量 `REALITY_SNI` 指定，不指定就用默认。
 
-也可以直接指定操作：
+也可以直接指定操作（不进菜单）：
 
 ```bash
-# 查看客户端配置（QuanX 行 + vless:// + 二维码，qrencode 装好后才有二维码）
+# 查看客户端配置（Surge 行 + QuanX 行 + vless:// + 二维码，qrencode 装好后才有二维码）
 bash reality show
+
+# 扫描邻居域名并重装（只换 dest/SNI；扫不到合格域名就停）
+bash reality rescan
+
+# 只换端口（域名/密钥不变）；非交互：REALITY_PORT=24444 bash reality change-port
+bash reality change-port
 
 # 更改配置：改伪装域名 / 改端口 / 重新生成密钥（可单改可全改，旧的客户端配置作废）
 bash reality reconfig
@@ -154,7 +165,7 @@ bash reality update
 # 卸载程序，保留配置，重装会继续用它
 bash reality uninstall
 
-# 彻底卸载，同时删配置、客户端文件和二维码
+# 彻底卸载，同时删配置、客户端文件和二维码（菜单 4 同款，命令行不问确认）
 bash reality uninstall --purge
 ```
 
@@ -180,7 +191,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 - 输出 Surge 和 QuanX 客户端配置并保存到 `/root/xray-reality-client.txt`，同时生成二维码：终端打印一份，PNG 存到 `/root/xray-reality-client.png`（装 `qrencode` 失败时跳过二维码，不中断安装，装好后跑 `bash reality show` 可补生成）
 - 依赖已齐全时跳过包管理器安装，二次运行改配置不必再跑一遍 apt/apk
 
-重装 / 升级时，已有配置的 UUID、私钥、端口、SNI、shortId 全部保留，不会悄悄换掉客户端配置。**要改这些，跑 `bash reality reconfig`（菜单 6）**：改域名、改端口、重新生成密钥（新私钥/公钥 + 新 shortId）、换 UUID 都可以单改，改完旧的 QuanX 行 / 链接 / 二维码全部作废，脚本会重新输出新的。改端口、改域名同样过 Cloudflare 硬规则（CF 反代端口、CF 站直接拒绝）和端口占用检查。
+重装 / 升级时，已有配置的 UUID、私钥、端口、SNI、shortId 全部保留，不会悄悄换掉客户端配置。**要改这些，跑 `bash reality reconfig`**：改域名、改端口、重新生成密钥（新私钥/公钥 + 新 shortId）、换 UUID 都可以单改，改完旧的 QuanX 行 / 链接 / 二维码全部作废，脚本会重新输出新的。改端口、改域名同样过 Cloudflare 硬规则（CF 反代端口、CF 站直接拒绝）和端口占用检查。只换端口也可以用菜单 3 / `bash reality change-port`；想换个邻居域名可以用菜单 2 / `bash reality rescan` 扫描后重装。
 
 自动安装通过 `REALITY_SNI` 将扫描得到的推荐域名传给安装脚本。单独运行 `reality install` 时，若没有提供域名且没有已有配置，当前实现仍会回退到 `www.amazon.com`；如需使用邻居域名，应显式指定 `REALITY_SNI`。
 
@@ -251,6 +262,7 @@ REALITY_UUID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx XRAY_VERSION=v26.10.31 bash re
 ## 仓库说明
 
 - `reality`、`scan-neighbors.sh`、`auto-reality.sh`：三个脚本，见上表。
+- `tests/`：不真装 Xray 的测试（替身 Xray + 替身扫描脚本），`bash tests/test-surge-output.sh`、`bash tests/test-xray-keys.sh`、`bash tests/test-menu.sh` 分别验 Surge/QuanX 输出、密钥解析、菜单/换端口/扫描重装/完全卸载。
 - `vendor/`：扫描器（RealiTLScanner）和检测器（RealityChecker）的固定版本二进制 + 检测用的数据快照（CDN 关键词、热门站点、GFW 列表、国家数据库）。脚本下载它们时会校验 SHA-256，不匹配的不执行；检测数据不自动更新。
 - 版本锁定：`auto-reality.sh` 拉取 `scan-neighbors.sh` 和 `reality` 时用的是固定提交，不是 main 的最新版——改了脚本要同步更新它里面的版本指向，修复才能生效。
 
