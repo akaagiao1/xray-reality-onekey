@@ -48,7 +48,7 @@
 #     不要只靠链接导入 (旧版解析器可能丢 reality 参数)
 #
 # 端口规则 (用户要求: 自定义或未占用):
-#   默认 443; 443 被占时自动改用 20000-60000 随机未占用、非 CF 端口并明说;
+#   默认 443; 443 被占时自动改用 10000-30000 随机未占用、非 CF 端口并明说;
 #   REALITY_PORT 显式指定的端口被占时直接报错, 不悄悄换。
 # 环境变量 (只在首次安装 / 无已有配置时生效, 已有配置优先保留):
 #   REALITY_PORT   默认 443, 自定义如 REALITY_PORT=24443 (别用 CF 反代端口)
@@ -213,11 +213,11 @@ port_owner_is_xray() { # $1=port ; 占用者是 Xray 自己返回 0 (重装时�
   ss -tlnp 2>/dev/null | grep -E "[:.]${p}[[:space:]]" | grep -qi 'xray'
 }
 
-pick_free_port() { # 在 20000-60000 随机挑一个未占用、非 CF 的端口
+pick_free_port() { # 在 10000-30000 随机挑一个未占用、非 CF 的端口
   local i cand
   for i in $(seq 1 100); do
-    if command -v shuf >/dev/null 2>&1; then cand="$(shuf -i 20000-60000 -n 1)"
-    else cand="$((20000 + RANDOM % 40001))"; fi
+    if command -v shuf >/dev/null 2>&1; then cand="$(shuf -i 10000-30000 -n 1)"
+    else cand="$((10000 + RANDOM % 20001))"; fi
     is_cf_port "$cand" && continue
     port_in_use "$cand" && continue
     printf '%s' "$cand"; return 0
@@ -672,7 +672,7 @@ do_install() {
   # 端口: 自定义或未占用 (用户要求, 2026-11-06)
   #   - 显式用 REALITY_PORT 指定的端口被占: 直接报错停下, 不悄悄换掉你指定的端口
   #   - 默认 443 / 沿用旧配置的端口被占, 且占用者不是 Xray 自己:
-  #     自动改用一个随机未占用、非 CF 的端口 (20000-60000), 并在输出里明说换了
+  #     自动改用一个随机未占用、非 CF 的端口 (10000-30000), 并在输出里明说换了
   if port_in_use "$port" && ! port_owner_is_xray "$port"; then
     if [ -n "${REALITY_PORT:-}" ]; then
       die "你指定的端口 $port 已被占用, 请先停掉占用服务, 或换一个未占用的端口再装 (REALITY_PORT=24443 之类, 别用 CF 反代端口)"

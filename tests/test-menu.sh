@@ -150,4 +150,15 @@ bash -c '
   printf "%s\n" "节点名测试通过"
 ' _ "$tmp/harness.sh" "$tmp" || exit 1
 
+# ---- 9) 自动换端口: 挑出来的端口都在 10000-30000 ----
+bash -c '
+  source "$1" "$2"
+  for _ in $(seq 1 30); do
+    p="$(pick_free_port)" || { echo "FAIL: pick_free_port 没挑到端口"; exit 1; }
+    case "$p" in ""|*[!0-9]*) echo "FAIL: 挑到的不是数字: $p"; exit 1;; esac
+    [ "$p" -ge 10000 ] && [ "$p" -le 30000 ] || { echo "FAIL: 挑到的端口 $p 不在 10000-30000"; exit 1; }
+  done
+  printf "%s\n" "自动换端口范围测试通过"
+' _ "$tmp/harness.sh" "$tmp" || exit 1
+
 printf '%s\n' '菜单、换端口、扫描重装、完全卸载测试全部通过'
