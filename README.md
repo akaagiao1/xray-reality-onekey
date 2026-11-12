@@ -205,7 +205,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 
 ```ini
 [Proxy]
-Reality = vless, 服务器IP, 443, username=<UUID>, flow=xtls-rprx-vision, sni=<你的邻居域名>, reality-public-key=<公钥>, reality-short-id=<shortId>
+LA-Surge-Reality = vless, 服务器IP, 443, username=<UUID>, flow=xtls-rprx-vision, sni=<你的邻居域名>, reality-public-key=<公钥>, reality-short-id=<shortId>
 ```
 
 上面是格式示例，使用脚本输出的真实值。Surge 的 REALITY 无需额外设置 `tls=true`，VLESS 默认支持 UDP relay；客户端使用自己的 TLS 栈。需要 Surge iOS **6.0.0+** 或 Mac **6.12.0+**，详见 [Surge VLESS 官方文档](https://manual.nssurge.com/policies/vless.html)。请保护包含 UUID、公钥和 shortId 的客户端文件，避免公开分享。
@@ -215,7 +215,7 @@ Reality = vless, 服务器IP, 443, username=<UUID>, flow=xtls-rprx-vision, sni=<
 安装完成后，**优先用这一行**，粘贴到 QuanX 配置的 `[server_local]`：
 
 ```ini
-vless=服务器IP:443, method=none, password=<UUID>, obfs=over-tls, obfs-host=<你的邻居域名>, reality-base64-pubkey=<公钥>, reality-hex-shortid=<16位hex>, vless-flow=xtls-rprx-vision, udp-relay=true, tag=Reality-QuanX
+vless=服务器IP:443, method=none, password=<UUID>, obfs=over-tls, obfs-host=<你的邻居域名>, reality-base64-pubkey=<公钥>, reality-hex-shortid=<16位hex>, vless-flow=xtls-rprx-vision, udp-relay=true, tag=LA-Quanx-Reality
 ```
 
 不要只靠 `vless://` 链接导入：旧版解析器可能丢 `reality` 参数，节点会显示出来但连不上。
@@ -233,8 +233,20 @@ QuanX 兼容的关键点（依据 QuanX 官方 `sample.conf` v1.5.5 build 914）
 通用 `vless://` 链接（给其他客户端，如 sing-box / Shadowrocket / Loon）：
 
 ```text
-vless://<UUID>@<服务器IP>:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=<你的邻居域名>&fp=chrome&pbk=<公钥>&sid=<shortId>&type=tcp&headerType=none#Reality-QuanX
+vless://<UUID>@<服务器IP>:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=<你的邻居域名>&fp=chrome&pbk=<公钥>&sid=<shortId>&type=tcp&headerType=none#LA-Reality
 ```
+
+## 节点名字
+
+节点名按服务器公网 IP 的所在地自动生成，三个客户端各带自己的后缀（以洛杉矶为例，地区简写全大写，Surge / Quanx / Reality 首字母大写）：
+
+- Surge 行前面的名字：`LA-Surge-Reality`
+- QuanX 行的 `tag=`：`LA-Quanx-Reality`
+- vless:// 链接 `#` 后面的名字：`LA-Reality`
+
+地区码由 IP 查出来：洛杉矶 `LA`、旧金山 `SF`、纽约 `NY`、法兰克福 `FRA`、香港 `HK`、新加坡 `SIN`、东京 `TYO`。不在映射表里的城市直接用城市名去空格再转全大写，城市查不到用国家码，所在地查不到则不带地区码：`Surge-Reality` / `Quanx-Reality` / `Reality`。
+
+名字只是客户端里显示的，改名不影响连接；已经导入客户端的旧名字不会自动变，重新导入一次才会用新名字。想自己定名字，用 `REALITY_TAG` 指定（安装时或 `show` 时都行），指定后三个地方都用指定的名字，不再自动生成。
 
 ## 可选参数
 
@@ -242,7 +254,7 @@ vless://<UUID>@<服务器IP>:443?encryption=none&flow=xtls-rprx-vision&security=
 
 ```bash
 # 换端口 / 换伪装站 / 换节点名
-REALITY_PORT=24443 REALITY_SNI=你的邻居域名 REALITY_TAG=Reality-US bash reality install
+REALITY_PORT=24443 REALITY_SNI=你的邻居域名 REALITY_TAG=My-Node bash reality install
 
 # 用域名做客户端地址（而不是自动探测的公网 IP）
 REALITY_HOST=example.com bash reality install

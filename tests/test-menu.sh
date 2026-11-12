@@ -87,7 +87,8 @@ grep -Fq '端口已改: 443 -> 24444' "$tmp/change-port.out" || { echo 'FAIL: �
 [ "$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$tmp/xray-etc/config.json")" = "www.amazon.com" ] || { echo 'FAIL: 换端口时域名被改了'; exit 1; }
 [ "$(jq -r '.inbounds[0].settings.clients[0].id' "$tmp/xray-etc/config.json")" = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" ] || { echo 'FAIL: 换端口时 UUID 被改了'; exit 1; }
 grep -Fq '203.0.113.1:24444' "$tmp/client.txt" || { echo 'FAIL: 客户端文件里没新端口'; exit 1; }
-grep -Fq 'Reality-QuanX = vless, 203.0.113.1, 24444' "$tmp/client.txt" || { echo 'FAIL: 客户端文件里 Surge 行没新端口'; exit 1; }
+# 节点名现在按 IP 所在地自动生成, 这里只断言 Surge 行带新端口, 不写死名字
+grep -Fq '= vless, 203.0.113.1, 24444' "$tmp/client.txt" || { echo 'FAIL: 客户端文件里 Surge 行没新端口'; exit 1; }
 
 # ---- 3) 换端口拒绝 CF 端口: REALITY_PORT=8443 必须报错停下 ----
 if bash -c 'source "$1" "$2"; REALITY_PORT=8443 do_change_port' _ "$tmp/harness.sh" "$tmp" > "$tmp/cf-port.out" 2>&1; then
@@ -125,5 +126,28 @@ printf '9\n4\nno\n0\n' | timeout 15 script -qec "bash $tmp/reality" /dev/null > 
 grep -Fq '无效选择: 9' "$tmp/menu.out" || { echo 'FAIL: 菜单无效选择没警告'; cat "$tmp/menu.out"; exit 1; }
 grep -Fq '已取消, 什么都没删' "$tmp/menu.out" || { echo 'FAIL: 菜单 4 输错确认词没取消'; cat "$tmp/menu.out"; exit 1; }
 grep -Fq '1) 查看客户端配置 (Surge / QuanX / vless://)' "$tmp/menu.out" || { echo 'FAIL: 菜单里没显示选项 1'; cat "$tmp/menu.out"; exit 1; }
+
+# ---- 8) 节点名: 城市映射 + 按 IP 生成三名字 + 查不到回退 ----
+bash -c '
+  source "$1" "$2"
+  [ "$(city_code "Los Angeles" "US")" = "LA" ] || { echo "FAIL: Los Angeles 没映射成 LA"; exit 1; }
+  [ "$(city_code "Frankfurt am Main" "DE")" = "FRA" ] || { echo "FAIL: Frankfurt 没映射成 FRA"; exit 1; }
+  [ "$(city_code "Hong Kong" "HK")" = "HK" ] || { echo "FAIL: Hong Kong 没映射成 HK"; exit 1; }
+  [ "$(city_code "Reykjavik" "IS")" = "REYKJAVIK" ] || { echo "FAIL: 不在映射表里的城市没转成全大写"; exit 1; }
+  [ "$(city_code "" "DE")" = "DE" ] || { echo "FAIL: 没城市名时没用国家码"; exit 1; }
+  geo_code() { printf "LA"; }
+  unset REALITY_TAG
+  show_info "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" "cHViX2tleV9leGFtcGxlX2Jhc2U2NA==" "0123456789abcdef" "443" "www.amazon.com" > /dev/null
+  grep -Fq "LA-Surge-Reality = vless, 203.0.113.1, 443" "$CLIENT_FILE" || { echo "FAIL: Surge 行名字不是 LA-Surge-Reality"; exit 1; }
+  grep -Fq "tag=LA-Quanx-Reality" "$CLIENT_FILE" || { echo "FAIL: QuanX 行 tag 不是 LA-Quanx-Reality"; exit 1; }
+  grep -Fq "#LA-Reality" "$CLIENT_FILE" || { echo "FAIL: vless 链接名字不是 LA-Reality"; exit 1; }
+  geo_code() { :; }
+  show_info "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" "cHViX2tleV9leGFtcGxlX2Jhc2U2NA==" "0123456789abcdef" "443" "www.amazon.com" > /dev/null
+  grep -Fq "Surge-Reality = vless, 203.0.113.1, 443" "$CLIENT_FILE" || { echo "FAIL: 查不到所在地时 Surge 行没回退到 Surge-Reality"; exit 1; }
+  grep -Fq "tag=Quanx-Reality" "$CLIENT_FILE" || { echo "FAIL: 查不到所在地时 QuanX 行没回退到 Quanx-Reality"; exit 1; }
+  grep -Fq "#Reality" "$CLIENT_FILE" || { echo "FAIL: 查不到所在地时 vless 链接没回退到 Reality"; exit 1; }
+  grep -Fq "LA-" "$CLIENT_FILE" && { echo "FAIL: 回退后还有旧名字"; exit 1; }
+  printf "%s\n" "节点名测试通过"
+' _ "$tmp/harness.sh" "$tmp" || exit 1
 
 printf '%s\n' '菜单、换端口、扫描重装、完全卸载测试全部通过'

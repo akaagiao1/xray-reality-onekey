@@ -4,7 +4,7 @@ repo=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 sed -n '/^show_info() {/,/^do_show() {/p' "$repo/reality" | sed '$d' > "$tmp/function.sh"
 export CLIENT_FILE="$tmp/client.txt" CLIENT_PNG="$tmp/qr.png" CONFIG_FILE="$tmp/config.json"
-export REALITY_HOST='203.0.113.1' REALITY_TAG='Reality-Test' DEFAULT_TAG='Reality-QuanX'
+export REALITY_HOST='203.0.113.1' REALITY_TAG='Reality-Test'
 info() { :; }
 warn() { :; }
 source "$tmp/function.sh"

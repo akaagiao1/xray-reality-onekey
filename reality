@@ -53,7 +53,17 @@
 # 环境变量 (只在首次安装 / 无已有配置时生效, 已有配置优先保留):
 #   REALITY_PORT   默认 443, 自定义如 REALITY_PORT=24443 (别用 CF 反代端口)
 #   REALITY_SNI    默认 www.amazon.com (dest 与 serverNames 同值, 保持一致)
-#   REALITY_TAG    默认 Reality-QuanX
+#   REALITY_TAG    节点名, 指定后 Surge/QuanX/vless 三处都用它; 不指定则按 IP
+#                所在地自动生成三个名字: Surge 是 LA-Surge-Reality、QuanX 是
+#                LA-Quanx-Reality、vless 链接是 LA-Reality (以洛杉矶为例)
+# 节点名规则 (用户要求, 2026-11-12): 默认名不再是笼统的 Reality-QuanX,
+#   而是按本机公网 IP 的所在地生成, 三个客户端各带自己的后缀:
+#   Surge <地区码>-Surge-Reality、QuanX <地区码>-Quanx-Reality、vless <地区码>-Reality
+#   (地区码全大写, Surge/Quanx/Reality 首字母大写)
+#   (洛杉矶 LA、旧金山 SF、纽约 NY、法兰克福 FRA、香港 HK、新加坡 SIN、东京 TYO 等,
+#   不在映射表里的城市直接用城市名去空格, 城市查不到用国家码,
+#   所在地查不到则不带地区码: Surge-Reality / Quanx-Reality / Reality);
+#   名字只是客户端里显示的, 改名不影响连接; REALITY_TAG 指定了就三处都用指定的。
 #   REALITY_HOST   客户端填的地址, 默认自动探测公网 IP, 也可填域名
 #   REALITY_UUID   指定 UUID, 不指定则随机生成
 #   XRAY_VERSION   指定 Xray 版本, 如 v26.10.31; 不指定则取 GitHub 最新版
@@ -77,7 +87,6 @@ SERVICE_NAME="xray"
 FALLBACK_VERSION="v26.10.31"
 DEFAULT_SNI="www.amazon.com"
 DEFAULT_PORT="443"
-DEFAULT_TAG="Reality-QuanX"
 # Cloudflare 官方反代端口 (developers.cloudflare.com/fundamentals/reference/network-ports)
 CF_HTTP_PORTS="80 8080 8880 2052 2082 2086 2095"
 CF_HTTPS_PORTS="443 2053 2083 2087 2096 8443"
@@ -408,6 +417,57 @@ public_ip() {
   printf '%s' "$ip"
 }
 
+# ---- 节点名: 按 IP 所在地生成地区码, 三个客户端各加自己的后缀 -------
+city_code() { # $1=城市名 $2=国家码 ; 输出地区码, 城市名不在映射表里就去空格原样用
+  local city="$1" cc="$2" lower code=""
+  lower="$(printf '%s' "$city" | tr 'A-Z' 'a-z')"
+  case "$lower" in
+    "los angeles") code="LA" ;;
+    "san francisco") code="SF" ;;
+    "san jose") code="SJC" ;;
+    "new york") code="NY" ;;
+    "chicago") code="CHI" ;;
+    "dallas") code="DAL" ;;
+    "seattle") code="SEA" ;;
+    "miami") code="MIA" ;;
+    "ashburn") code="ASH" ;;
+    "frankfurt am main"|"frankfurt") code="FRA" ;;
+    "london") code="LON" ;;
+    "paris") code="PAR" ;;
+    "amsterdam") code="AMS" ;;
+    "hong kong") code="HK" ;;
+    "singapore") code="SIN" ;;
+    "tokyo") code="TYO" ;;
+    "osaka") code="OSA" ;;
+    "seoul") code="SEL" ;;
+    "sydney") code="SYD" ;;
+    "toronto") code="TOR" ;;
+    "") code="$(printf '%s' "$cc" | tr 'a-z' 'A-Z')" ;;
+    *) code="$(printf '%s' "$city" | tr -d ' \t' | tr -cd 'A-Za-z0-9-' | tr 'a-z' 'A-Z')" ;;
+  esac
+  printf '%s' "$code"
+}
+
+geo_code() { # $1=IPv4 ; 查它所在地的地区码, 查不到输出空 (不报错, 调用处回退)
+  local ip="$1" resp city cc
+  [ -n "$ip" ] || return 0
+  # ip-api.com 免费接口 (http), 只查本机 IP 自己的城市/国家, 8 秒超时
+  resp="$(curl -fsSL --max-time 8 "http://ip-api.com/json/${ip}?fields=status,city,countryCode" 2>/dev/null)" || return 0
+  [ "$(printf '%s' "$resp" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)" = "success" ] || return 0
+  city="$(printf '%s' "$resp" | grep -o '"city":"[^"]*"' | head -1 | cut -d'"' -f4)"
+  cc="$(printf '%s' "$resp" | grep -o '"countryCode":"[^"]*"' | head -1 | cut -d'"' -f4)"
+  city_code "$city" "$cc"
+}
+
+tag_prefix() { # $1=地址 (IP 或域名) ; 返回 IP 所在地的地区码, 查不到返回空
+  local addr="${1:-}" ip=""
+  case "$addr" in
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*) ip="$addr" ;;
+    *) ip="$(public_ip)" ;;
+  esac
+  geo_code "$ip"
+}
+
 # ---- 服务 -----------------------------------------------------------------
 stop_service() {
   case "$INIT" in
@@ -636,15 +696,28 @@ do_install() {
 show_info() { # $1=uuid $2=pubkey $3=shortid $4=port $5=sni
   local uuid="$1" pub="$2" shortid="$3" port="$4" sni="$5"
   local host="${REALITY_HOST:-$(public_ip)}"
-  local tag="${REALITY_TAG:-$DEFAULT_TAG}"
+  # 节点名: 不指定 REALITY_TAG 时按 IP 所在地生成, 三个客户端名字各带自己的后缀
+  #   Surge: LA-Surge-Reality / QuanX: LA-Quanx-Reality / vless: LA-Reality
+  # 指定了 REALITY_TAG 则三处都用指定的名字; 所在地查不到则不带地区码前缀
+  local surge_name qx_name link_name
+  if [ -n "${REALITY_TAG:-}" ]; then
+    surge_name="$REALITY_TAG"; qx_name="$REALITY_TAG"; link_name="$REALITY_TAG"
+  else
+    local prefix; prefix="$(tag_prefix "$host")"
+    if [ -n "$prefix" ]; then
+      surge_name="${prefix}-Surge-Reality"; qx_name="${prefix}-Quanx-Reality"; link_name="${prefix}-Reality"
+    else
+      surge_name="Surge-Reality"; qx_name="Quanx-Reality"; link_name="Reality"
+    fi
+  fi
   # vless:// 链接: pbk 是 base64url 公钥, 不用再转义; sid 16 位 hex; fp=chrome
-  local link="vless://${uuid}@${host}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${pub}&sid=${shortid}&type=tcp&headerType=none#${tag}"
+  local link="vless://${uuid}@${host}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${pub}&sid=${shortid}&type=tcp&headerType=none#${link_name}"
   # QuanX 行: 按官方 sample.conf vless-tls-reality-vision-01 的写法,
   # obfs=over-tls + obfs-host=<SNI>, 不带 fast-open (Reality 下必须关, 见文件头注释)
-  local qx="vless=${host}:${port}, method=none, password=${uuid}, obfs=over-tls, obfs-host=${sni}, reality-base64-pubkey=${pub}, reality-hex-shortid=${shortid}, vless-flow=xtls-rprx-vision, udp-relay=true, tag=${tag}"
+  local qx="vless=${host}:${port}, method=none, password=${uuid}, obfs=over-tls, obfs-host=${sni}, reality-base64-pubkey=${pub}, reality-hex-shortid=${shortid}, vless-flow=xtls-rprx-vision, udp-relay=true, tag=${qx_name}"
   # Surge 官方 VLESS 参数：REALITY 无需 tls=true，UDP relay 默认启用。
   # 节点名中的分隔符会破坏 Surge 配置行，替换为空格。
-  local surge_tag="${tag//,/ }"
+  local surge_tag="${surge_name//,/ }"
   surge_tag="${surge_tag//=/ }"
   surge_tag="${surge_tag//$'\n'/ }"
   surge_tag="${surge_tag//$'\r'/ }"
