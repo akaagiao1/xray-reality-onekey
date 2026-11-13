@@ -451,13 +451,17 @@ download_xray() {
       die "Xray 下载失败: $url"
     fi
   fi
-  # 有 .dgst 就验 sha256, 验不过直接停, 不装来路不明的文件
+  # 有 .dgst 就验 sha256, 验不过直接停, 不装来路不明的文件;
+  # .dgst 里写的是 SHA2-256= (不是 SHA256), 两个写法都认, 否则 grep 永远
+  # 找不到、校验会被静默跳过 (2026-11-13 发现的旧 bug)
   if curl -fsSL --max-time 30 -o "${tmpdir}/xray.zip.dgst" "${url}.dgst" 2>/dev/null; then
-    local want; want="$(grep -i 'SHA256' "${tmpdir}/xray.zip.dgst" | head -1 | awk '{print $NF}')"
+    local want; want="$(grep -iE 'SHA2-256|SHA256' "${tmpdir}/xray.zip.dgst" | head -1 | awk '{print $NF}')"
     if [ -n "$want" ]; then
       local got; got="$(sha256sum "${tmpdir}/xray.zip" 2>/dev/null | awk '{print $1}')"
       [ "$got" = "$want" ] || die "Xray 校验失败 (sha256 不符), 已停止安装"
       info "sha256 校验通过"
+    else
+      warn ".dgst 里没找到 sha256, 跳过校验 (格式可能变了, 请检查)"
     fi
   else
     warn "未拿到 .dgst, 跳过 sha256 校验"
