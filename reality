@@ -3,7 +3,7 @@
 #
 # 用法:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/<repo>/main/reality)
-#   bash reality install | reconfig | show | rescan | change-port | update | restart | status | uninstall [--purge]
+#   bash reality install | reconfig | show | rescan | change-port | update | restart | status | probe | uninstall [--purge]
 #   安装时有终端会问伪装域名, 回车默认 www.amazon.com, 也可自己填 (如 heiheiai.shop);
 #   二次运行: bash reality 进菜单, 4 个选项: 1 查看 Surge/QuanX/vless 2 扫描域名重装
 #   3 换端口 4 完全卸载; 安装完自动输出 Surge 行 + QuanX 行 + vless:// 链接 + 二维码
@@ -50,8 +50,13 @@
 # 端口规则 (用户要求: 自定义或未占用):
 #   默认 443; 443 被占时自动改用 10000-30000 随机未占用、非 CF 端口并明说;
 #   REALITY_PORT 显式指定的端口被占时直接报错, 不悄悄换。
+#   443 入站探活 (2026-11-13): 装完 443 后从两个机房回连, 看外面能不能连进来,
+#   两个都连不进来 (入站被堵) 就自动换高端口并重新出配置, 只换一次;
+#   探活服务本身没结论时保持 443 不动; REALITY_SKIP_PROBE=1 可关掉探活。
+#   只测不改用 bash reality probe。
 # 环境变量 (只在首次安装 / 无已有配置时生效, 已有配置优先保留):
 #   REALITY_PORT   默认 443, 自定义如 REALITY_PORT=24443 (别用 CF 反代端口)
+#   REALITY_SKIP_PROBE  设为 1 则跳过 443 入站探活, 默认装完 443 会从外面探一次
 #   REALITY_SNI    默认 www.amazon.com (dest 与 serverNames 同值, 保持一致)
 #   REALITY_SCAN_CIDRS  rescan 扫描范围优先级, 逗号或空格分隔, 如
 #                REALITY_SCAN_CIDRS="154.9.238.0/23,154.9.234.0/23"; 不指定则按
@@ -94,6 +99,9 @@ DEFAULT_SNI="www.amazon.com"
 # 改用它安装; 平时单独安装、回车默认的仍是上面的 www.amazon.com
 FALLBACK_SNI="www.apple.com"
 DEFAULT_PORT="443"
+# 443 入站探活节点 (EDIS Looking Glass 公开 API, 免 key, 支持 IPv6, 同步返回):
+# 维也纳 + 东京两个机房回连, 两个都说不通才判定被堵
+PROBE_NODES="at.edisglobal.com jp.edisglobal.com"
 # Cloudflare 官方反代端口 (developers.cloudflare.com/fundamentals/reference/network-ports)
 CF_HTTP_PORTS="80 8080 8880 2052 2082 2086 2095"
 CF_HTTPS_PORTS="443 2053 2083 2087 2096 8443"
@@ -230,6 +238,95 @@ pick_free_port() { # 在 10000-30000 随机挑一个未占用、非 CF 的端口
     printf '%s' "$cand"; return 0
   done
   die "100 次都没挑到未占用端口, 请手动用 REALITY_PORT 指定一个未占用端口"
+}
+
+# ---- 443 入站探活: 外面连不进来就自动换高端口 ---------------------------
+# 443 在本机监听正常不代表外面能连进来: 上游可能丢弃入站 SYN, 本机自连
+# 测不出来, 必须从外面回连。探活调 EDIS Looking Glass 的公开 API
+# (docs.edisglobal.com/looking-glass-api/port, 免 key, 支持 IPv6, 同步返回),
+# 从两个机房各连一次, 两个都说不通才判定被堵; 探活服务本身出错时不换端口。
+is_private_target() { # $1=host ; 内网/回环/链路本地/ULA 返回 0, 探活无意义
+  local h="$1"
+  h="${h#[}"; h="${h%]}"
+  h="$(printf '%s' "$h" | tr 'A-Z' 'a-z')"
+  case "$h" in
+    10.*|192.168.*|127.*|0.*) return 0 ;;
+    172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
+    ::1|fe80:*|fc??:*|fd??:*) return 0 ;;
+    localhost) return 0 ;;
+  esac
+  return 1
+}
+
+probe_one_node() { # $1=node $2=host $3=port ; stdout 只输出 open|closed|unknown
+  local node="$1" host="$2" port="$3" resp status
+  host="${host#[}"; host="${host%]}"
+  resp="$(curl -fsSL --max-time 15 -G "https://${node}/api/v1/port" \
+    --data-urlencode "target=${host}" --data-urlencode "port=${port}" \
+    --data-urlencode "family=auto" -H "Accept: application/json" 2>/dev/null)" || { printf 'unknown'; return 0; }
+  status="$(printf '%s' "$resp" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)"
+  case "$status" in
+    open) printf 'open' ;;
+    closed|timeout|unreachable) printf 'closed' ;;
+    *) printf 'unknown' ;;
+  esac
+}
+
+probe_port_external() { # $1=host $2=port ; stdout 只输出 open|closed|unknown
+  # 一个节点说通就直接通; 两个节点都说不通才算不通; 其余 (探活服务本身
+  # 没回有效结果) 一律 unknown, 不触发换端口
+  local host="$1" port="$2" node r closed=0
+  for node in $PROBE_NODES; do
+    r="$(probe_one_node "$node" "$host" "$port")"
+    case "$r" in
+      open) printf 'open'; return 0 ;;
+      closed) closed=$((closed+1)) ;;
+    esac
+  done
+  [ "$closed" -ge 2 ] && { printf 'closed'; return 0; }
+  printf 'unknown'
+}
+
+probe_fallback() { # $1=uuid $2=priv $3=shortid $4=port $5=sni ; stdout 只输出最终端口, 诊断走 stderr
+  local uuid="$1" priv="$2" shortid="$3" port="$4" sni="$5"
+  if [ "$port" != "$DEFAULT_PORT" ] || [ "${REALITY_SKIP_PROBE:-0}" = "1" ]; then
+    printf '%s' "$port"; return 0
+  fi
+  local host="${REALITY_HOST:-$(public_ip)}"
+  if [ -z "$host" ] || is_private_target "$host"; then
+    warn "探活跳过: 拿不到公网地址, 无法从外面验证 443 是否通, 请装完自己用客户端测一下" >&2
+    printf '%s' "$port"; return 0
+  fi
+  info "探活 443 入站: 从两个机房回连 ${host}:443, 看外面能不能连进来..." >&2
+  local verdict; verdict="$(probe_port_external "$host" "$port")"
+  case "$verdict" in
+    open)
+      info "探活通过: ${host}:443 外面连得进来, 保持 443" >&2
+      printf '%s' "$port"; return 0 ;;
+    unknown)
+      warn "探活没结论 (探活服务没回有效结果), 保持 443 不动; 若客户端连不上, 用 bash reality change-port 换个高端口" >&2
+      printf '%s' "$port"; return 0 ;;
+  esac
+  # closed: 两个机房都连不进来, 443 入站被堵, 换高端口 (只换一次, 不循环探)
+  warn "探活确认: ${host}:443 从外面连不进来 (443 入站被堵), 自动换高端口" >&2
+  local new_port; new_port="$(pick_free_port)"
+  write_config "$uuid" "$priv" "$shortid" "$new_port" "$sni"
+  stop_service
+  # start_service / open_firewall 的提示走 stdout, 这里重定向掉, 否则会混进
+  # 调用处 $() 接的最终端口里; 失败时 die 走 stderr, 不受影响
+  start_service >/dev/null
+  service_active || die "换端口后 Xray 未运行, 查日志: systemd 用 journalctl -u xray -n 50; OpenRC 用 rc-service xray status"
+  open_firewall "$new_port" >/dev/null 2>&1 || true
+  warn "旧端口 443 的防火墙/安全组规则仍在, 不用了请手动关掉" >&2
+  info "端口已改: 443 -> $new_port (探活 fallback, 域名、UUID、密钥、shortId 都没变)" >&2
+  # 新端口只探一次确认, 结果只报告, 不再换
+  local v2; v2="$(probe_one_node "at.edisglobal.com" "$host" "$new_port")"
+  case "$v2" in
+    open) info "探活确认: ${host}:${new_port} 外面连得进来" >&2 ;;
+    closed) warn "注意: 新端口 ${new_port} 探活也不通, 可能整台机器的入站都有问题, 请检查安全组/防火墙" >&2 ;;
+    *) warn "新端口 ${new_port} 探活没结论, 请用客户端实测" >&2 ;;
+  esac
+  printf '%s' "$new_port"
 }
 
 # ---- 系统识别 -------------------------------------------------------------
@@ -697,6 +794,8 @@ do_install() {
   service_active || die "Xray 启动后未处于运行状态, 查日志: systemd 用 journalctl -u xray -n 50; OpenRC 用 rc-service xray status"
   open_firewall "$port"
   try_bbr
+  # 443 入站探活: 外面连不进来就自动换高端口, probe_fallback 只在 stdout 输出最终端口
+  port="$(probe_fallback "$uuid" "$priv" "$shortid" "$port" "$sni")"
   show_info "$uuid" "$pub" "$shortid" "$port" "$sni"
 }
 
@@ -779,6 +878,27 @@ do_show() {
   pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | extract_xray_public)"
   [ -n "$uuid" ] && [ -n "$pub" ] && [ -n "$shortid" ] || die "配置不完整, 请重装"
   show_info "$uuid" "$pub" "$shortid" "$port" "$sni"
+}
+
+do_probe() { # 只测不改: 读当前配置, 从外面探一次端口通不通, 报告结果
+  [ -f "$CONFIG_FILE" ] || die "还没安装, 配置 $CONFIG_FILE 不存在, 先跑 bash reality install"
+  local port host
+  port="$(existing_value port)"
+  host="${REALITY_HOST:-$(public_ip)}"
+  [ -n "$port" ] || die "配置里读不到端口, 请检查 $CONFIG_FILE"
+  if [ -z "$host" ] || is_private_target "$host"; then
+    die "拿不到公网地址, 无法从外面探活; 用 REALITY_HOST=公网IP或域名 bash reality probe 指定"
+  fi
+  info "探活: 从两个机房回连 ${host}:${port}..."
+  local verdict; verdict="$(probe_port_external "$host" "$port")"
+  case "$verdict" in
+    open) info "结果: 通, ${host}:${port} 外面连得进来" ;;
+    closed)
+      warn "结果: 不通, ${host}:${port} 从外面连不进来 (入站被堵或端口没监听)"
+      info "换个端口试试: REALITY_PORT=新端口 bash reality change-port (别用 CF 反代端口)"
+      ;;
+    *) warn "结果: 没结论, 探活服务没回有效结果, 请稍后重试或用客户端实测" ;;
+  esac
 }
 
 do_change_port() { # 只换端口: 域名/UUID/密钥/shortId 全不变, 旧端口的客户端配置作废
@@ -1056,17 +1176,20 @@ case "${1:-}" in
   update|upgrade) do_update "$@" ;;
   restart) need_root "$@"; detect_init; start_service; service_active && info "服务已重启" || die "重启失败" ;;
   status) do_status ;;
+  probe) do_probe ;;
   uninstall|remove) do_uninstall "$@" ;;
   -h|--help|help)
-    printf '%s\n' "用法: bash reality [install|show|rescan|change-port|reconfig|update|restart|status|uninstall [--purge]]"
+    printf '%s\n' "用法: bash reality [install|show|rescan|change-port|reconfig|update|restart|status|probe|uninstall [--purge]]"
     printf '%s\n' "无参数时: 有终端进菜单 (1 查看配置 / 2 扫描重装 / 3 换端口 / 4 完全卸载), 无终端 (管道/重定向) 直接安装"
     printf '%s\n' "show: 输出 Surge 行 + QuanX 行 + vless:// 链接 + 二维码"
+    printf '%s\n' "probe: 只测不改, 从两个机房回连当前端口, 报告外面能不能连进来"
+    printf '%s\n' "安装完 443 会自动探活, 两个机房都连不进来就自动换高端口; REALITY_SKIP_PROBE=1 可关掉探活"
     printf '%s\n' "rescan: 扫描邻居网段, 用推荐域名重装 (只换 dest/SNI, UUID/密钥/端口不变; 扫不到改用 www.apple.com)"
     printf '%s\n' "change-port: 只换端口, 域名/密钥不变; 非交互用 REALITY_PORT=新端口 bash reality change-port"
     printf '%s\n' "reconfig: 改伪装域名 / 端口 / 重新生成密钥, 旧的客户端配置作废"
     printf '%s\n' "uninstall: 只卸程序、保留配置; uninstall --purge: 彻底卸载, 配置/客户端文件/二维码一起删"
     printf '%s\n' "安装时有终端会提示自选伪装域名, 回车保持默认/当前; 非交互用 REALITY_SNI=域名指定"
-    printf '%s\n' "环境变量: REALITY_PORT REALITY_SNI REALITY_TAG REALITY_HOST REALITY_UUID XRAY_VERSION"
+    printf '%s\n' "环境变量: REALITY_PORT REALITY_SNI REALITY_TAG REALITY_HOST REALITY_UUID XRAY_VERSION REALITY_SKIP_PROBE"
     printf '%s\n' "改配置非交互: REALITY_SNI=.. REALITY_PORT=.. REALITY_REGEN_KEYS=1 REALITY_REGEN_UUID=1 bash reality reconfig"
     ;;
   *) die "未知命令: $1, 用 bash reality --help 看用法" ;;

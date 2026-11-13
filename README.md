@@ -59,6 +59,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 | 命令 | 作用 |
 | --- | --- |
 | `bash reality show` | 查看客户端配置（已有节点重新生成配置也用它） |
+| `bash reality probe` | 只测不改，从两个机房回连当前端口，报告外面能不能连进来 |
 | `bash reality rescan` | 菜单 2：扫描邻居域名并重装 |
 | `bash reality change-port` | 菜单 3：只换端口 |
 | `bash reality reconfig` | 改伪装域名 / 端口 / 重新生成密钥，旧客户端配置全部作废 |
@@ -108,6 +109,7 @@ vless://<UUID>@<服务器IP>:443?encryption=none&flow=xtls-rprx-vision&security=
 硬规则，安装前校验，不合规直接拒绝，不悄悄放行：
 
 - **端口**：默认 443。443 被占时自动改用 10000–30000 里随机挑的未占用、非 CF 端口，并在输出里明说；`REALITY_PORT` 显式指定的端口被占则直接报错。自定义端口绝不能是 CF 反代端口：
+- **443 入站探活**：装完 443 后脚本从两个机房（EDIS Looking Glass 公开 API，免 key，支持 IPv6）回连验证外面能不能进来，两个都连不进来（入站被堵）就自动换一个高端口并重新出配置，只换一次；探活服务本身没结论时保持 443 不动。`REALITY_SKIP_PROBE=1` 可关掉探活，`bash reality probe` 只测不改。
   - HTTP：`80` `8080` `8880` `2052` `2082` `2086` `2095`
   - HTTPS：`2053` `2083` `2087` `2096` `8443`
 - **Reality 域名（dest / SNI）**：绝不能是 CF 站点或解析到 CF IP 的站点。鉴权失败的流量会原样回落到 dest，dest 若是 CF CDN 站，服务器就成了免费 CF 端口转发，会被偷流量。
@@ -124,6 +126,7 @@ vless://<UUID>@<服务器IP>:443?encryption=none&flow=xtls-rprx-vision&security=
 | `REALITY_SCAN_CIDRS` | 扫描范围优先级，逗号或空格分隔，如 `154.9.238.0/23,154.9.234.0/23`；不指定则按本机 /23 → 相邻上段 → 相邻下段的顺序扫 |
 | `REALITY_TAG` | 节点名，指定后三处都用它，不指定则按 IP 所在地自动生成 |
 | `REALITY_HOST` | 客户端填的地址，默认自动探测公网 IP，也可填域名 |
+| `REALITY_SKIP_PROBE` | 设为 `1` 则跳过 443 入站探活 |
 | `REALITY_UUID` / `XRAY_VERSION` | 指定 UUID / Xray 版本，不指定则随机生成 / 取 GitHub 最新版 |
 
 ```bash
