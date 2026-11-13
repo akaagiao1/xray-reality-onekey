@@ -79,7 +79,7 @@ grep -Fq "未拿到 .dgst" "$tmp/nodgst.out" || { echo "FAIL: 拿不到 .dgst �
 [ -x "$tmp/xray" ] || { echo "FAIL: 拿不到 .dgst 时二进制没装上"; exit 1; }
 printf "%s\n" "无 .dgst 继续安装测试通过"
 
-# ---- 4) auto-reality.sh 的 pin: 必须是 40 位提交, 且该提交的 reality 带探活功能 ----
+# ---- 4) auto-reality.sh 的 pin: 必须是 40 位提交, 且该提交的 reality 带探活功能与多模式 ----
 pin="$(grep -o "xray-reality-onekey/[0-9a-f]*" "$repo/auto-reality.sh" | head -1 | cut -d/ -f2)"
 case "$pin" in
   ????????????????????????????????????????) : ;;
@@ -89,6 +89,8 @@ curl -fsSL --max-time 30 "https://raw.githubusercontent.com/akaagiao1/xray-reali
 grep -Fq "probe_fallback" "$tmp/pinned-reality" || { echo "FAIL: pin 提交的 reality 没有探活 fallback, pin 需要 bump"; exit 1; }
 grep -Fq "PROBE_NODES" "$tmp/pinned-reality" || { echo "FAIL: pin 提交的 reality 没有 PROBE_NODES"; exit 1; }
 grep -Fq "REALITY_SKIP_PROBE" "$tmp/pinned-reality" || { echo "FAIL: pin 提交的 reality 没有 REALITY_SKIP_PROBE"; exit 1; }
+grep -Fq "REALITY_MODES" "$tmp/pinned-reality" || { echo "FAIL: pin 提交的 reality 没有多模式 (REALITY_MODES), pin 需要 bump"; exit 1; }
+grep -Fq "gen_vlessenc" "$tmp/pinned-reality" || { echo "FAIL: pin 提交的 reality 没有 VLESS Encryption (gen_vlessenc), pin 需要 bump"; exit 1; }
 curl -fsSL --max-time 30 "https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/${pin}/scan-neighbors.sh" -o "$tmp/pinned-scan" || { echo "FAIL: pin 提交的 scan-neighbors.sh 拉不到"; exit 1; }
 [ -s "$tmp/pinned-scan" ] || { echo "FAIL: pin 提交的 scan-neighbors.sh 是空的"; exit 1; }
 grep -Fq "recommend-file" "$tmp/pinned-scan" || { echo "FAIL: pin 提交的 scan-neighbors.sh 不像扫描脚本"; exit 1; }

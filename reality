@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
-# Xray VLESS + REALITY + Vision 一键脚本 — 主攻 Quantumult X (QuanX)
+# Xray VLESS 多模式一键脚本 — 模式 1 主攻 Quantumult X (QuanX) 与 Surge, 模式 2/3 只出 vless 链接
 #
 # 用法:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/<repo>/main/reality)
-#   bash reality install | reconfig | show | rescan | change-port | update | restart | status | probe | uninstall [--purge]
-#   安装时有终端会问伪装域名, 回车默认 www.amazon.com, 也可自己填 (如 heiheiai.shop);
-#   二次运行: bash reality 进菜单, 4 个选项: 1 查看 Surge/QuanX/vless 2 扫描域名重装
-#   3 换端口 4 完全卸载; 安装完自动输出 Surge 行 + QuanX 行 + vless:// 链接 + 二维码
+#   bash reality install | show | rescan | change-port | reconfig | update | restart | status | probe | logs | remove-mode | uninstall [--purge]
+#   安装时有终端会问节点模式 (回车=全部, 可多选如 1,3) 和伪装域名,
+#   域名回车默认 www.amazon.com, 也可自己填 (如 heiheiai.shop);
+#   二次运行: bash reality 进菜单, 7 个选项: 1 查看客户端配置 2 扫描域名重装
+#   3 换端口 4 安装/添加节点 5 完全卸载 6 查看实时日志 7 重启;
+#   安装完自动输出各模式的客户端配置: 模式 1 有 Surge 行 + QuanX 行 + vless:// 链接,
+#   模式 2/3 只有 vless:// 链接 (Surge 需 Beta 版导入, QuanX 不支持), 另加二维码
 #   (终端打印 + PNG 文件)。
 #
 # 兼容: Debian 11/12/13, Ubuntu 20.04/22.04/24.04, Alpine Linux (OpenRC)
 # 服务端: Xray-core (默认最新版, 失败时回落到已验证的 v26.10.31)
-# 协议: VLESS / TCP + REALITY + xtls-rprx-vision, 默认 443, 伪装 www.amazon.com:443
+# 三种模式 (一个配置多个入站, 各用各的端口与凭据, 可单装可多选):
+#   模式 1 Reality 原版: VLESS / TCP + REALITY + xtls-rprx-vision, 默认高端口
+#     (10000-30000 随机未占用、非 CF 端口); QuanX 与 Surge 正式版都能用
+#   模式 2 VLESS Encryption: VLESS / TCP + VLESS Encryption (mlkem768x25519plus),
+#     不叠 REALITY/TLS, 默认高端口; 链接导入, Surge 需 Beta 版 (正式版/QuanX 不支持)
+#   模式 3 推荐组合: VLESS / TCP + REALITY + Vision + VLESS Encryption, 默认 443
+#     (被占/被堵自动换高端口); 链接导入, Surge 需 Beta 版 (正式版/QuanX 不支持)
+#   伪装域名默认 www.amazon.com:443
 #   (实测: Xray 26.10.31 对 www.apple.com / www.microsoft.com 会警告
 #    “会增加服务器 IP 被 GFW 封的概率”, www.amazon.com 则不警告, 故默认用它;
 #    想跟已有 sing-box 节点保持一致可用 REALITY_SNI=www.apple.com 改回去)
@@ -24,12 +34,16 @@
 #     会被忽略, 且 Client Hello 超 1500 字节, 所以绝不能开 TCP Fast Open
 #     —— 脚本输出的 QuanX 行里 deliberately 不带 fast-open, 服务端也不开
 #   - shortId 固定 16 位 hex (8 字节), 与官方示例 0123456789abcdef 同长
+#   - QuanX 不支持 VLESS Encryption, QuanX 行只在模式 1 输出
 #
 # Surge 也支持 (iOS 6.0.0+ / Mac 6.12.0+, 官方 VLESS 文档):
 #   - Surge 行按官方写法: vless, <host>, <port>, username=<UUID>,
 #     flow=xtls-rprx-vision, sni=<SNI>, reality-public-key=<公钥>,
 #     reality-short-id=<shortId>; REALITY 下不用再加 tls=true, UDP relay 默认启用
 #   - 低版本 Surge 没有 VLESS, 贴过去不识别, 请先升级客户端再用 Surge 行
+#   - VLESS Encryption (模式 2/3) 只有 Surge Beta 支持, 正式版手册明确写着
+#     不支持 (encryption 只接受 none); 模式 2/3 只出 vless 链接
+#     (encryption=<串> 参数), Surge Beta 用分享链接导入, 不拼 Surge 配置行
 #
 # 防 CF / 防偷流量 (用户明确要求, 2026-11-06):
 #   - 端口: 默认 443 保留 (Reality 必须冒充 443 上的真站, 且直连 VPS IP、
@@ -47,23 +61,32 @@
 #   - 同时输出标准 vless:// 链接, 但 QuanX 建议直接粘贴下面的 QuanX 行,
 #     不要只靠链接导入 (旧版解析器可能丢 reality 参数)
 #
-# 端口规则 (用户要求: 自定义或未占用):
-#   默认 443; 443 被占时自动改用 10000-30000 随机未占用、非 CF 端口并明说;
-#   REALITY_PORT 显式指定的端口被占时直接报错, 不悄悄换。
-#   443 入站探活 (2026-11-13): 装完 443 后从两个机房回连, 看外面能不能连进来,
-#   两个都连不进来 (入站被堵) 就自动换高端口并重新出配置, 只换一次;
-#   探活服务本身没结论时保持 443 不动; REALITY_SKIP_PROBE=1 可关掉探活。
+# 端口规则 (用户要求, 2026-11-13: 模式 3 用 443, 模式 1/2 用高端口):
+#   模式 3 默认 443; 443 被占时自动改用 10000-30000 随机未占用、非 CF 端口并明说;
+#   模式 1/2 默认 10000-30000 随机未占用、非 CF 端口;
+#   REALITY_PORT 显式指定的端口被占时直接报错, 不悄悄换; 它只改第一个
+#   (数字最小的) 模式的端口, 其余模式仍按上面的规则分配。
+#   443 入站探活 (2026-11-13): 哪个模式在 443 上, 装完就从两个机房回连,
+#   看外面能不能连进来, 两个都连不进来 (入站被堵) 就自动换高端口并重新出配置,
+#   只换一次; 探活服务本身没结论时保持 443 不动; REALITY_SKIP_PROBE=1 可关掉探活。
 #   只测不改用 bash reality probe。
 # 环境变量 (只在首次安装 / 无已有配置时生效, 已有配置优先保留):
-#   REALITY_PORT   默认 443, 自定义如 REALITY_PORT=24443 (别用 CF 反代端口)
+#   REALITY_MODES  要装的模式, 如 REALITY_MODES=1,3 或 REALITY_MODES=all;
+#                不指定时交互安装回车=全部, 非交互默认只装模式 1
+#   REALITY_MODE   change-port / reconfig / remove-mode 要操作的模式 (1/2/3);
+#                只装了一个模式时不用指定, 多模式非交互时必须指定
+#   REALITY_PORT   第一个模式的端口, 默认按模式规则分配 (见上),
+#                自定义如 REALITY_PORT=24443 (别用 CF 反代端口)
 #   REALITY_SKIP_PROBE  设为 1 则跳过 443 入站探活, 默认装完 443 会从外面探一次
 #   REALITY_SNI    默认 www.amazon.com (dest 与 serverNames 同值, 保持一致)
 #   REALITY_SCAN_CIDRS  rescan 扫描范围优先级, 逗号或空格分隔, 如
 #                REALITY_SCAN_CIDRS="154.9.238.0/23,154.9.234.0/23"; 不指定则按
 #                本机 /23 → 相邻上段 /23 → 相邻下段 /23 的顺序扫
-#   REALITY_TAG    节点名, 指定后 Surge/QuanX/vless 三处都用它; 不指定则按 IP
-#                所在地自动生成三个名字: Surge 是 LA-Surge-Reality、QuanX 是
-#                LA-Quanx-Reality、vless 链接是 LA-Reality (以洛杉矶为例)
+#   REALITY_TAG    节点名, 指定后各模式的名字都以它为前缀再加模式后缀;
+#                不指定则按 IP 所在地自动生成: 模式 1 是 LA-Surge-Reality /
+#                LA-Quanx-Reality / LA-Reality (以洛杉矶为例), 模式 2 是
+#                LA-Surge-Enc / LA-Enc, 模式 3 是 LA-Surge-RealityEnc /
+#                LA-RealityEnc; 只装模式 1 时指定 TAG 则三处都原样用它
 # 节点名规则 (用户要求, 2026-11-12): 默认名不再是笼统的 Reality-QuanX,
 #   而是按本机公网 IP 的所在地生成, 三个客户端各带自己的后缀:
 #   Surge <地区码>-Surge-Reality、QuanX <地区码>-Quanx-Reality、vless <地区码>-Reality
@@ -71,17 +94,20 @@
 #   (洛杉矶 LA、旧金山 SF、纽约 NY、法兰克福 FRA、香港 HK、新加坡 SIN、东京 TYO 等,
 #   不在映射表里的城市直接用城市名去空格, 城市查不到用国家码,
 #   所在地查不到则不带地区码: Surge-Reality / Quanx-Reality / Reality);
-#   名字只是客户端里显示的, 改名不影响连接; REALITY_TAG 指定了就三处都用指定的。
+#   模式 2/3 的后缀分别是 Enc 与 RealityEnc, 用来跟模式 1 区分开;
+#   名字只是客户端里显示的, 改名不影响连接。
 #   REALITY_HOST   客户端填的地址, 默认自动探测公网 IP, 也可填域名
-#   REALITY_UUID   指定 UUID, 不指定则随机生成
+#   REALITY_UUID   指定 UUID (只给第一个模式), 不指定则随机生成
 #   XRAY_VERSION   指定 Xray 版本, 如 v26.10.31; 不指定则取 GitHub 最新版
 # 改配置用 bash reality reconfig (命令行, 不在菜单里), 非交互时可用:
-#   REALITY_SNI / REALITY_PORT 指定新值, REALITY_REGEN_KEYS=1 换密钥+shortId,
-#   REALITY_REGEN_UUID=1 同时换 UUID。
-# 只换端口用 bash reality change-port (菜单 3), 非交互: REALITY_PORT=新端口 bash reality change-port。
+#   REALITY_SNI / REALITY_PORT 指定新值, REALITY_REGEN_KEYS=1 换密钥+shortId
+#   (加密模式同时换 Encryption 密钥), REALITY_REGEN_UUID=1 同时换 UUID,
+#   多模式时再加 REALITY_MODE=1/2/3 指定改哪一个。
+# 只换端口用 bash reality change-port (菜单 3), 非交互: REALITY_PORT=新端口 bash reality change-port,
+#   多模式时再加 REALITY_MODE=1/2/3 指定换哪一个。
 # 扫描邻居域名并重装用 bash reality rescan (菜单 2): 按本机 /23 → 相邻上段 /23 →
 # 相邻下段 /23 的优先级扫, 哪个先扫到合格域名就用哪个做新 dest/SNI, UUID/密钥/端口不变;
-# 都扫不到改用 www.apple.com 安装。
+# 都扫不到改用 www.apple.com 安装; 只换 Reality 模式 (1/3) 的域名, 只装了模式 2 时没域名可扫。
 #
 set -u
 export LC_ALL=C
@@ -107,6 +133,8 @@ CF_HTTP_PORTS="80 8080 8880 2052 2082 2086 2095"
 CF_HTTPS_PORTS="443 2053 2083 2087 2096 8443"
 # Cloudflare 官方 IPv4 段 (www.cloudflare.com/ips-v4, 2026-11-06 核对, 共 15 段)
 CF_IPV4_CIDRS="103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 104.16.0.0/13 104.24.0.0/14 108.162.192.0/18 131.0.72.0/22 141.101.64.0/18 162.158.0.0/15 172.64.0.0/13 173.245.48.0/20 188.114.96.0/20 190.93.240.0/20 197.234.240.0/22 198.41.128.0/17"
+# 本次安装已分配的端口 (空格分隔), pick_free_port 会跳过它们, 避免两个模式撞端口
+ASSIGNED_PORTS=""
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()  { printf '%b[INFO]%b %s\n' "$GREEN" "$NC" "$*"; }
@@ -228,16 +256,56 @@ port_owner_is_xray() { # $1=port ; 占用者是 Xray 自己返回 0 (重装时�
   ss -tlnp 2>/dev/null | grep -E "[:.]${p}[[:space:]]" | grep -qi 'xray'
 }
 
-pick_free_port() { # 在 10000-30000 随机挑一个未占用、非 CF 的端口
+pick_free_port() { # 在 10000-30000 随机挑一个未占用、非 CF、且本次没分配过的端口
   local i cand
   for i in $(seq 1 100); do
     if command -v shuf >/dev/null 2>&1; then cand="$(shuf -i 10000-30000 -n 1)"
     else cand="$((10000 + RANDOM % 20001))"; fi
     is_cf_port "$cand" && continue
+    case " ${ASSIGNED_PORTS:-} " in *" $cand "*) continue ;; esac
     port_in_use "$cand" && continue
     printf '%s' "$cand"; return 0
   done
   die "100 次都没挑到未占用端口, 请手动用 REALITY_PORT 指定一个未占用端口"
+}
+
+assign_port() { # $1=模式 $2=已有端口(可空) $3=是否第一个模式(1/0) ; stdout 只输出端口
+  # 规则 (用户要求, 2026-11-13): 模式 3 默认 443, 被占自动换高端口;
+  # 模式 1/2 默认高端口; REALITY_PORT 只改第一个模式的端口, 被占直接报错;
+  # 已装好的模式保持原端口; 一个端口只能给一个模式。
+  local mode="$1" existing="$2" is_first="$3" desired=""
+  if [ "$is_first" = "1" ] && [ -n "${REALITY_PORT:-}" ]; then
+    desired="$REALITY_PORT"
+    validate_port "$desired"
+    case " ${ASSIGNED_PORTS:-} " in *" $desired "*)
+      die "端口 $desired 已分配给本次安装的另一个模式, 一个端口只能给一个模式" ;;
+    esac
+    local m2 p2
+    for m2 in $(installed_modes); do
+      [ "$m2" = "$mode" ] && continue
+      p2="$(inbound_value "$m2" port)"
+      [ "$p2" = "$desired" ] && die "端口 $desired 已被已装的模式 $m2 占用, 一个端口只能给一个模式"
+    done
+    if port_in_use "$desired" && ! port_owner_is_xray "$desired"; then
+      die "你指定的端口 $desired 已被占用, 请先停掉占用服务, 或换一个未占用的端口再装 (REALITY_PORT=24443 之类, 别用 CF 反代端口)"
+    fi
+  elif [ -n "$existing" ]; then
+    desired="$existing"
+  elif [ "$mode" = "3" ]; then
+    desired="$DEFAULT_PORT"
+    if port_in_use "$desired"; then
+      # 新装模式 3 且 443 被占 (不管是谁占的; 已有端口走上面分支, 不会到这里):
+      # 自动换高端口并明说
+      local np; np="$(pick_free_port)"
+      warn "端口 443 已被占用, 模式 3 自动改用未占用端口 $np (非 CF 反代端口)" >&2
+      desired="$np"
+    fi
+  else
+    desired="$(pick_free_port)"
+  fi
+  validate_port "$desired"
+  ASSIGNED_PORTS="${ASSIGNED_PORTS:-} $desired"
+  printf '%s' "$desired"
 }
 
 # ---- 443 入站探活: 外面连不进来就自动换高端口 ---------------------------
@@ -287,8 +355,12 @@ probe_port_external() { # $1=host $2=port ; stdout 只输出 open|closed|unknown
   printf 'unknown'
 }
 
-probe_fallback() { # $1=uuid $2=priv $3=shortid $4=port $5=sni ; stdout 只输出最终端口, 诊断走 stderr
-  local uuid="$1" priv="$2" shortid="$3" port="$4" sni="$5"
+probe_fallback() { # $1=模式 ; stdout 只输出最终端口, 诊断走 stderr
+  # 只探在 443 上的模式: 两个机房都连不进来就换高端口 (只换一次, 不循环探),
+  # 只改这个模式的入站端口, 其他模式的入站不动。
+  local mode="$1"
+  local port; port="$(inbound_value "$mode" port)"
+  [ -n "$port" ] || die "模式 $mode 配置里读不到端口, 请检查 $CONFIG_FILE"
   if [ "$port" != "$DEFAULT_PORT" ] || [ "${REALITY_SKIP_PROBE:-0}" = "1" ]; then
     printf '%s' "$port"; return 0
   fi
@@ -310,7 +382,9 @@ probe_fallback() { # $1=uuid $2=priv $3=shortid $4=port $5=sni ; stdout 只输�
   # closed: 两个机房都连不进来, 443 入站被堵, 换高端口 (只换一次, 不循环探)
   warn "探活确认: ${host}:443 从外面连不进来 (443 入站被堵), 自动换高端口" >&2
   local new_port; new_port="$(pick_free_port)"
-  write_config "$uuid" "$priv" "$shortid" "$new_port" "$sni"
+  [ -n "$new_port" ] || die "挑不到可用高端口"
+  set_inbound_port "$mode" "$new_port"
+  validate_config
   stop_service
   # start_service / open_firewall 的提示走 stdout, 这里重定向掉, 否则会混进
   # 调用处 $() 接的最终端口里; 失败时 die 走 stderr, 不受影响
@@ -483,15 +557,206 @@ json_get() { # $1=file $2=jq表达式
   [ -f "$1" ] && command -v jq >/dev/null 2>&1 && jq -r "$2 // empty" "$1" 2>/dev/null
 }
 
-existing_value() { # $1=key: uuid|priv|pub|shortid|port|sni
-  [ -f "$CONFIG_FILE" ] || return 0
+# ---- 多模式配置层: 一个配置多个入站, 按 tag 区分模式 -------------------
+# 模式 1 Reality 原版 / 模式 2 VLESS Encryption / 模式 3 推荐组合;
+# 旧版单入站配置没有 tag, 读的时候把没 tag 的 vless 入站当成模式 1,
+# 写的时候顺手给它打上 tag, 老节点不用重装。
+mode_tag() { # $1=模式 ; 输出该模式入站的 tag
   case "$1" in
-    uuid)    json_get "$CONFIG_FILE" '.inbounds[0].settings.clients[0].id' ;;
-    priv)    json_get "$CONFIG_FILE" '.inbounds[0].streamSettings.realitySettings.privateKey' ;;
-    port)    json_get "$CONFIG_FILE" '.inbounds[0].port' ;;
-    sni)     json_get "$CONFIG_FILE" '.inbounds[0].streamSettings.realitySettings.serverNames[0]' ;;
-    shortid) json_get "$CONFIG_FILE" '.inbounds[0].streamSettings.realitySettings.shortIds[0]' ;;
+    1) printf 'vless-reality' ;;
+    2) printf 'vless-enc' ;;
+    3) printf 'vless-reality-enc' ;;
+    *) die "未知模式: $1" ;;
   esac
+}
+
+mode_has_reality() { # $1=模式 ; Reality 模式返回 0
+  case "$1" in 1|3) return 0 ;; *) return 1 ;; esac
+}
+
+mode_has_enc() { # $1=模式 ; 带 VLESS Encryption 的模式返回 0
+  case "$1" in 2|3) return 0 ;; *) return 1 ;; esac
+}
+
+mode_inbound() { # $1=模式 ; 输出该模式入站的 JSON (一行), 没装输出空
+  local mode="$1" tag out
+  tag="$(mode_tag "$mode")"
+  [ -f "$CONFIG_FILE" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  out="$(jq -c --arg tag "$tag" '.inbounds[] | select(.tag == $tag)' "$CONFIG_FILE" 2>/dev/null | head -1)"
+  if [ -z "$out" ] && [ "$mode" = "1" ]; then
+    out="$(jq -c '.inbounds[] | select(.tag == null and .protocol == "vless")' "$CONFIG_FILE" 2>/dev/null | head -1)"
+  fi
+  printf '%s' "$out"
+}
+
+inbound_value() { # $1=模式 $2=key: uuid|priv|port|sni|shortid|decryption
+  local mode="$1" key="$2" inb q
+  inb="$(mode_inbound "$mode")"; [ -n "$inb" ] || return 0
+  case "$key" in
+    uuid)       q='.settings.clients[0].id' ;;
+    priv)       q='.streamSettings.realitySettings.privateKey' ;;
+    port)       q='.port' ;;
+    sni)        q='.streamSettings.realitySettings.serverNames[0]' ;;
+    shortid)    q='.streamSettings.realitySettings.shortIds[0]' ;;
+    decryption) q='.settings.decryption' ;;
+    *) return 0 ;;
+  esac
+  printf '%s' "$inb" | jq -r "$q // empty" 2>/dev/null
+}
+
+installed_modes() { # 输出已装的模式, 空格分隔、升序, 如 "1 3"; 没装输出空
+  [ -f "$CONFIG_FILE" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  local modes="" tag
+  for tag in $(jq -r '.inbounds[]?.tag // empty' "$CONFIG_FILE" 2>/dev/null); do
+    case "$tag" in
+      vless-reality) modes="$modes 1" ;;
+      vless-enc) modes="$modes 2" ;;
+      vless-reality-enc) modes="$modes 3" ;;
+    esac
+  done
+  # 旧配置: 没 tag 的 vless 入站算模式 1 (还没认出来时才补)
+  case " $modes " in *" 1 "*) ;; *)
+    if jq -e 'any(.inbounds[]; .tag == null and .protocol == "vless")' "$CONFIG_FILE" >/dev/null 2>&1; then
+      modes="$modes 1"
+    fi
+    ;;
+  esac
+  printf '%s' "$modes" | tr ' ' '\n' | grep -v '^$' | sort -nu | tr '\n' ' ' | sed 's/ *$//'
+}
+
+existing_value() { # $1=key ; 兼容老调用: 读模式 1 (含旧版无 tag 配置)
+  inbound_value 1 "$1"
+}
+
+ensure_config() { # 配置不存在就写骨架; 存在但缺 inbounds/outbounds 就补齐
+  mkdir -p "$CONFIG_DIR"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    cat > "$CONFIG_FILE" <<'EOF'
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [],
+  "outbounds": [
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
+  ]
+}
+EOF
+    return 0
+  fi
+  jq -e . "$CONFIG_FILE" >/dev/null 2>&1 || die "配置 $CONFIG_FILE 不是合法 JSON, 请检查后重试"
+  if ! jq -e '.inbounds and .outbounds' "$CONFIG_FILE" >/dev/null 2>&1; then
+    local tmpf; tmpf="$(mktemp)"
+    jq '.inbounds //= [] | .outbounds //= [{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block"}] | .log //= {"loglevel":"warning"}' "$CONFIG_FILE" > "$tmpf" \
+      || { rm -f "$tmpf"; die "配置 $CONFIG_FILE 规范化失败"; }
+    mv "$tmpf" "$CONFIG_FILE"
+  fi
+}
+
+backup_config() { # 改配置前备份一份, 出问题能回滚
+  [ -f "$CONFIG_FILE" ] && cp -a "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+}
+
+validate_config() { # Xray 校验当前配置, 不通过直接停
+  "$XRAY_BIN" -test -config "$CONFIG_FILE" >/dev/null 2>&1 || \
+    die "Xray 配置校验失败, 配置已写到 $CONFIG_FILE, 请检查后重试"
+}
+
+upsert_inbound() { # $1=模式 $2=入站 JSON ; 替换同 tag 的入站, 没有就追加; 其他入站原样保留
+  local mode="$1" inb="$2" tag tmpf
+  tag="$(mode_tag "$mode")"
+  [ -n "$inb" ] || die "模式 $mode 的入站配置为空, 拒绝写入"
+  tmpf="$(mktemp)"
+  if [ "$mode" = "1" ]; then
+    # 模式 1 还要吃掉旧版没 tag 的 vless 入站 (它就是模式 1, 不能留两个)
+    jq --argjson inb "$inb" --arg tag "$tag" \
+      '.inbounds = ((.inbounds // []) | map(select(.tag != $tag and (.tag != null or .protocol != "vless"))) + [$inb])' \
+      "$CONFIG_FILE" > "$tmpf" || { rm -f "$tmpf"; die "写配置失败 (jq)"; }
+  else
+    jq --argjson inb "$inb" --arg tag "$tag" \
+      '.inbounds = ((.inbounds // []) | map(select(.tag != $tag)) + [$inb])' \
+      "$CONFIG_FILE" > "$tmpf" || { rm -f "$tmpf"; die "写配置失败 (jq)"; }
+  fi
+  mv "$tmpf" "$CONFIG_FILE"
+}
+
+set_inbound_port() { # $1=模式 $2=新端口 ; 只改这个模式的入站端口, 其余不动
+  local mode="$1" port="$2" tag tmpf
+  tag="$(mode_tag "$mode")"
+  tmpf="$(mktemp)"
+  jq --arg tag "$tag" --argjson port "$port" --arg mode "$mode" \
+    '.inbounds |= map(if .tag == $tag or ($mode == "1" and .tag == null and .protocol == "vless") then .tag = $tag | .port = $port else . end)' \
+    "$CONFIG_FILE" > "$tmpf" || { rm -f "$tmpf"; die "改端口失败 (jq)"; }
+  mv "$tmpf" "$CONFIG_FILE"
+  [ "$(inbound_value "$mode" port)" = "$port" ] || die "模式 $mode 的端口没改成 $port, 请检查 $CONFIG_FILE"
+}
+
+remove_inbound() { # $1=模式 ; 删掉这个模式的入站, 其他入站不动
+  local mode="$1" tag tmpf
+  tag="$(mode_tag "$mode")"
+  tmpf="$(mktemp)"
+  jq --arg tag "$tag" --arg mode "$mode" \
+    '.inbounds |= map(select(.tag != $tag and ($mode != "1" or .tag != null or .protocol != "vless")))' \
+    "$CONFIG_FILE" > "$tmpf" || { rm -f "$tmpf"; die "删入站失败 (jq)"; }
+  mv "$tmpf" "$CONFIG_FILE"
+  [ -z "$(mode_inbound "$mode")" ] || die "模式 $mode 的入站没删掉, 请检查 $CONFIG_FILE"
+}
+
+parse_modes() { # $1=输入 (如 "1,3" / "1 2" / "all") ; stdout 输出升序去重后的模式, 无效返回 1
+  local input="$1" norm m out=""
+  norm="$(printf '%s' "$input" | sed 's/，/,/g; s/,/ /g' | tr -s ' ' | sed 's/^ //; s/ $//')"
+  [ -n "$norm" ] || return 1
+  for m in $norm; do
+    case "$m" in
+      1|2|3) out="$out $m" ;;
+      all|ALL|全部) out="$out 1 2 3" ;;
+      *) return 1 ;;
+    esac
+  done
+  printf '%s' "$out" | tr ' ' '\n' | grep -v '^$' | sort -nu | tr '\n' ' ' | sed 's/ *$//'
+}
+
+prompt_modes() { # 交互选模式: 回车=全部, 可多选如 1,3 ; 提示走 stderr, 结果走 stdout
+  local ans="" tries=0 parsed=""
+  while [ "$tries" -lt 3 ]; do
+    printf '%s\n' "节点模式: 1) Reality 原版 (QuanX/Surge)  2) VLESS Encryption (链接导入)  3) 推荐组合 Reality+Encryption (链接导入)" >&2
+    printf '选择模式 (回车=全部, 可多选如 1,3): ' >&2
+    read -r ans || ans=""
+    ans="$(printf '%s' "$ans" | tr -d '\t\r\n')"
+    [ -z "$ans" ] && { printf '1 2 3'; return 0; }
+    if parsed="$(parse_modes "$ans")"; then printf '%s' "$parsed"; return 0; fi
+    tries=$((tries+1))
+    printf '%s\n' "[WARN] 输入无效: $ans, 请填 1/2/3 的组合 (如 1,3) 或回车选全部 (还剩 $((3-tries)) 次)" >&2
+  done
+  printf '%s\n' "[ERROR] 连续 3 次输入无效, 已停止; 也可以用 REALITY_MODES=1,3 直接指定后安装" >&2
+  return 1
+}
+
+target_mode() { # 要操作的模式: REALITY_MODE > 唯一已装模式 > 交互选择; 提示走 stderr, 结果走 stdout
+  local modes; modes="$(installed_modes)"
+  [ -n "$modes" ] || die "配置里没有脚本管理的节点, 请先安装"
+  if [ -n "${REALITY_MODE:-}" ]; then
+    case "$REALITY_MODE" in 1|2|3) ;; *) die "REALITY_MODE 无效: $REALITY_MODE, 请填 1/2/3" ;; esac
+    printf '%s' "$modes" | grep -qw "$REALITY_MODE" || die "模式 $REALITY_MODE 还没安装, 已装模式: $modes"
+    printf '%s' "$REALITY_MODE"; return 0
+  fi
+  if [ "$(printf '%s' "$modes" | wc -w)" = "1" ]; then printf '%s' "$modes"; return 0; fi
+  [ -t 0 ] || die "装了多个模式 ($modes), 请用 REALITY_MODE=1/2/3 指定要操作的模式"
+  local ans="" tries=0
+  while [ "$tries" -lt 3 ]; do
+    printf '装了多个模式 (%s), 操作哪一个 [1/2/3]: ' "$modes" >&2
+    read -r ans || ans=""
+    ans="$(printf '%s' "$ans" | tr -d ' \t\r\n')"
+    case "$ans" in
+      1|2|3)
+        if printf '%s' "$modes" | grep -qw "$ans"; then printf '%s' "$ans"; return 0; fi ;;
+    esac
+    tries=$((tries+1))
+    printf '%s\n' "[WARN] 请选择已装的模式 ($modes) (还剩 $((3-tries)) 次)" >&2
+  done
+  printf '%s\n' "[ERROR] 连续 3 次输入无效, 已停止" >&2
+  return 1
 }
 
 # 新版 Xray 将 Public key 字段命名为 Password（可能带 PublicKey 注释）。
@@ -513,6 +778,32 @@ gen_keypair() { # 输出两行: 私钥 / 公钥
   pub="$(printf '%s' "$out" | extract_xray_public)"
   [ -n "$priv" ] && [ -n "$pub" ] || die "解析 x25519 密钥失败, xray 输出: $out"
   printf '%s\n%s\n' "$priv" "$pub"
+}
+
+gen_vlessenc() { # 输出两行: 服务端 decryption / 客户端 encryption (取 X25519 那对, 链接短)
+  # xray vlessenc 输出两对认证 (X25519 与 ML-KEM-768), 只能选一对, 不能混用;
+  # X25519 那对的密钥是 43 字符, ML-KEM-768 那对上千字符, 按最后一段长度挑 X25519 那对。
+  # 握手本身的临时密钥交换两种都是后量子安全的, 认证方式只影响服务端身份认证。
+  local out dec enc
+  out="$("$XRAY_BIN" vlessenc 2>/dev/null)" || die "xray vlessenc 生成 VLESS Encryption 密钥失败 (需要 Xray 25.9.5+)"
+  dec="$(printf '%s' "$out" | grep '"decryption"' | sed -E 's/.*"decryption": *"([^"]+)".*/\1/' | awk -F. 'length($NF)==43 {print; exit}')"
+  enc="$(printf '%s' "$out" | grep '"encryption"' | sed -E 's/.*"encryption": *"([^"]+)".*/\1/' | awk -F. 'length($NF)==43 {print; exit}')"
+  [ -n "$dec" ] && [ -n "$enc" ] || die "解析 vlessenc 输出失败, xray 输出: $out"
+  printf '%s\n%s\n' "$dec" "$enc"
+}
+
+derive_encryption() { # $1=服务端 decryption ; 输出客户端 encryption (X25519 私钥反推公钥, 0rtt)
+  # decryption 与 encryption 只有两处不同: 第 3 段 (服务端是票据有效期如 600s,
+  # 客户端是 0rtt) 与最后一段 (服务端是 X25519 私钥, 客户端是对应的公钥);
+  # 公钥用 xray x25519 -i 从私钥反推, 与 vlessenc 直接给的 encryption 串完全一致,
+  # 所以 show 时不用多存一份客户端串。
+  local dec="$1" mode priv pub
+  mode="$(printf '%s' "$dec" | cut -d. -f2)"
+  priv="${dec##*.}"
+  [ -n "$mode" ] && [ -n "$priv" ] || die "decryption 字符串格式不对: $dec"
+  pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | extract_xray_public)"
+  [ -n "$pub" ] || die "VLESS Encryption 私钥无法反推公钥, 请检查配置"
+  printf 'mlkem768x25519plus.%s.0rtt.%s' "$mode" "$pub"
 }
 
 public_ip() {
@@ -684,53 +975,70 @@ prompt_sni() { # $1=当前值(已有配置或默认) ; 交互时让用户自选�
   return 1
 }
 
-write_config() { # $1=uuid $2=priv $3=shortid $4=port $5=sni ; 写配置并校验
-  # 注意: 下面这行 local 必须单独成行。之前它跟在行尾 # 注释后面,
-  # 整行都被当成注释, 参数根本没绑上, 函数是靠 bash 动态作用域偷看到
-  # 调用者的同名 local 变量才工作的。do_install 里恰好有 port/sni
-  # 同名变量所以能装, do_reconfig 里只有 new_port/new_sni,
-  # port/sni 为空, heredoc 在 set -u 下直接把配置文件截成 0 字节,
-  # reconfig 必挂。改成显式绑定后与调用者变量名无关。
-  local uuid="$1" priv="$2" shortid="$3" port="$4" sni="$5"
-  mkdir -p "$CONFIG_DIR"
-  [ -f "$CONFIG_FILE" ] && cp -a "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%Y%m%d%H%M%S)"
-  cat > "$CONFIG_FILE" <<EOF
-{
-  "log": { "loglevel": "warning" },
-  "inbounds": [
-    {
-      "port": ${port},
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          { "id": "${uuid}", "flow": "xtls-rprx-vision" }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "tcp",
-        "security": "reality",
-        "realitySettings": {
-          "show": false,
-          "target": "${sni}:443",
-          "xver": 0,
-          "serverNames": ["${sni}"],
-          "privateKey": "${priv}",
-          "shortIds": ["${shortid}"]
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    { "protocol": "freedom", "tag": "direct" },
-    { "protocol": "blackhole", "tag": "block" }
-  ]
+inbound_json() { # $1=模式 $2=uuid $3=port $4=sni $5=priv $6=shortid $7=decryption ; stdout 输出入站 JSON
+  # 用 jq -n 组装, 避免 heredoc 拼 JSON 时引号/转义出错; 服务端 realitySettings
+  # 里没有 fingerprint 字段 (那是客户端的), 别往里加, Xray 会直接报错。
+  local mode="$1" uuid="$2" port="$3" sni="$4" priv="$5" shortid="$6" dec="$7"
+  case "$mode" in
+    1)
+      jq -n --arg tag "$(mode_tag 1)" --arg uuid "$uuid" --argjson port "$port" \
+        --arg sni "$sni" --arg priv "$priv" --arg sid "$shortid" \
+        '{tag:$tag, port:$port, protocol:"vless",
+          settings:{clients:[{id:$uuid, flow:"xtls-rprx-vision"}], decryption:"none"},
+          streamSettings:{network:"tcp", security:"reality",
+            realitySettings:{show:false, target:($sni+":443"), xver:0, serverNames:[$sni], privateKey:$priv, shortIds:[$sid]}}}'
+      ;;
+    2)
+      jq -n --arg tag "$(mode_tag 2)" --arg uuid "$uuid" --argjson port "$port" --arg dec "$dec" \
+        '{tag:$tag, port:$port, protocol:"vless",
+          settings:{clients:[{id:$uuid}], decryption:$dec},
+          streamSettings:{network:"tcp", security:"none"}}'
+      ;;
+    3)
+      jq -n --arg tag "$(mode_tag 3)" --arg uuid "$uuid" --argjson port "$port" \
+        --arg sni "$sni" --arg priv "$priv" --arg sid "$shortid" --arg dec "$dec" \
+        '{tag:$tag, port:$port, protocol:"vless",
+          settings:{clients:[{id:$uuid, flow:"xtls-rprx-vision"}], decryption:$dec},
+          streamSettings:{network:"tcp", security:"reality",
+            realitySettings:{show:false, target:($sni+":443"), xver:0, serverNames:[$sni], privateKey:$priv, shortIds:[$sid]}}}'
+      ;;
+  esac
 }
-EOF
-  # 服务端 realitySettings 里没有 fingerprint 字段 (那是客户端的),
-  # 别往里加, Xray 会直接报错; 客户端指纹在下面的链接 / QuanX 行里体现.
-  "$XRAY_BIN" -test -config "$CONFIG_FILE" >/dev/null 2>&1 || \
-    die "Xray 配置校验失败, 配置已写到 $CONFIG_FILE, 请检查后重试"
+
+mode_png() { # $1=模式 ; 该模式的二维码 PNG 路径 (模式 1 沿用老名字)
+  case "$1" in
+    1) printf '%s' "$CLIENT_PNG" ;;
+    2) printf '%s-vlessenc.png' "${CLIENT_FILE%.txt}" ;;
+    3) printf '%s-reality-vlessenc.png' "${CLIENT_FILE%.txt}" ;;
+  esac
+}
+
+bracket_host() { # $1=地址 ; IPv6 加方括号 (QuanX 行与 vless 链接必须, Surge 行是逗号字段不用)
+  # 先去掉已有的方括号再决定, 避免 REALITY_HOST 本来就带括号时套两层
+  local h="${1#[}"; h="${h%]}"
+  case "$h" in *:*) printf '[%s]' "$h" ;; *) printf '%s' "$h" ;; esac
+}
+
+mode_name_suffix() { # $1=模式 $2=客户端 surge|qx|link ; 输出名字后缀 (没 QuanX 的模式不输出)
+  case "$1:$2" in
+    1:surge) printf 'Surge-Reality' ;;
+    1:qx) printf 'Quanx-Reality' ;;
+    1:link) printf 'Reality' ;;
+    2:surge) printf 'Surge-Enc' ;;
+    2:link) printf 'Enc' ;;
+    3:surge) printf 'Surge-RealityEnc' ;;
+    3:link) printf 'RealityEnc' ;;
+  esac
+}
+
+mode_display_name() { # $1=模式 $2=客户端 $3=地区码前缀(可空) $4=REALITY_TAG(可空) $5=模式总数
+  local suffix; suffix="$(mode_name_suffix "$1" "$2")"
+  if [ -n "$4" ]; then
+    # 单模式 1 + TAG: 老行为, 三处都原样用指定的名字; 多模式时加后缀区分开
+    if [ "$5" = "1" ] && [ "$1" = "1" ]; then printf '%s' "$4";
+    else printf '%s-%s' "$4" "$suffix"; fi
+  elif [ -n "$3" ]; then printf '%s-%s' "$3" "$suffix"
+  else printf '%s' "$suffix"; fi
 }
 
 do_install() {
@@ -747,201 +1055,305 @@ do_install() {
   install_deps
   detect_init
 
-  local port="${REALITY_PORT:-$(existing_value port)}"
-  [ -n "$port" ] || port="$DEFAULT_PORT"
-  local sni="${REALITY_SNI:-$(existing_value sni)}"
-  [ -n "$sni" ] || sni="$DEFAULT_SNI"
-  if [ -t 0 ] && [ -z "${REALITY_SNI:-}" ]; then
-    # 交互安装: 让用户自己选伪装域名 (用户要求, 2026-11-06), 回车保持当前值;
-    # 环境变量 REALITY_SNI 指定了就跳过提问, 非交互 (管道) 也不问
-    sni="$(prompt_sni "$sni")" || die "选择伪装域名失败, 也可以用 REALITY_SNI=域名 直接指定后重装"
+  # 模式: 环境变量 > 交互选择 (回车=全部) > 非交互默认只装模式 1
+  local modes=""
+  if [ -n "${REALITY_MODES:-}" ]; then
+    modes="$(parse_modes "$REALITY_MODES")" || die "REALITY_MODES 无效: $REALITY_MODES, 请填 1/2/3 的组合 (如 1,3) 或 all"
+  elif [ -t 0 ]; then
+    modes="$(prompt_modes)" || die "选择节点模式失败, 也可以用 REALITY_MODES=1,3 直接指定后安装"
+  else
+    modes="1"
   fi
-  # CF 校验在下载 / 写配置之前做, 不合规直接停, 不浪费一次下载
-  validate_port "$port"
-  validate_sni "$sni"
+  local has_reality=0 m
+  for m in $modes; do mode_has_reality "$m" && has_reality=1; done
+
+  # SNI: 只有 Reality 模式才需要; 只装模式 2 时不问不校验
+  local sni=""
+  if [ "$has_reality" = "1" ]; then
+    sni="${REALITY_SNI:-$(inbound_value 1 sni)}"
+    [ -n "$sni" ] || sni="$(inbound_value 3 sni)"
+    [ -n "$sni" ] || sni="$DEFAULT_SNI"
+    if [ -t 0 ] && [ -z "${REALITY_SNI:-}" ]; then
+      # 交互安装: 让用户自己选伪装域名 (用户要求, 2026-11-06), 回车保持当前值;
+      # 环境变量 REALITY_SNI 指定了就跳过提问, 非交互 (管道) 也不问
+      sni="$(prompt_sni "$sni")" || die "选择伪装域名失败, 也可以用 REALITY_SNI=域名 直接指定后重装"
+    fi
+    # CF 校验在下载 / 写配置之前做, 不合规直接停, 不浪费一次下载
+    validate_sni "$sni"
+  fi
   [ -n "${REALITY_HOST:-}" ] && validate_host "$REALITY_HOST"
   [ -x "$XRAY_BIN" ] || download_xray
-  local uuid="${REALITY_UUID:-$(existing_value uuid)}"
-  [ -n "$uuid" ] || uuid="$(gen_uuid)"
-  local priv pub shortid
-  priv="$(existing_value priv)"
-  if [ -n "$priv" ]; then
-    # 已有私钥则用它反推公钥, 保持客户端配置不变
-    pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | extract_xray_public)"
-    [ -n "$pub" ] || die "已有私钥无法反推公钥, 请删配置重装或检查私钥"
-  else
-    local kp; kp="$(gen_keypair)"
-    priv="$(printf '%s' "$kp" | sed -n '1p')"
-    pub="$(printf '%s' "$kp" | sed -n '2p')"
-  fi
-  shortid="$(existing_value shortid)"
-  [ -n "$shortid" ] || shortid="$(openssl rand -hex 8 2>/dev/null || head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 
-  # 端口: 自定义或未占用 (用户要求, 2026-11-06)
-  #   - 显式用 REALITY_PORT 指定的端口被占: 直接报错停下, 不悄悄换掉你指定的端口
-  #   - 默认 443 / 沿用旧配置的端口被占, 且占用者不是 Xray 自己:
-  #     自动改用一个随机未占用、非 CF 的端口 (10000-30000), 并在输出里明说换了
-  if port_in_use "$port" && ! port_owner_is_xray "$port"; then
-    if [ -n "${REALITY_PORT:-}" ]; then
-      die "你指定的端口 $port 已被占用, 请先停掉占用服务, 或换一个未占用的端口再装 (REALITY_PORT=24443 之类, 别用 CF 反代端口)"
+  ensure_config
+  backup_config
+  ASSIGNED_PORTS=""
+  local first=1
+  for m in $modes; do
+    # UUID: REALITY_UUID 只给第一个模式; 其余沿用已有, 没有就新生成
+    local uuid=""
+    if [ "$first" = "1" ] && [ -n "${REALITY_UUID:-}" ]; then uuid="$REALITY_UUID";
+    else uuid="$(inbound_value "$m" uuid)"; fi
+    [ -n "$uuid" ] || uuid="$(gen_uuid)"
+    # 端口: 模式 3 默认 443 (被占自动换高端口), 模式 1/2 默认高端口,
+    # 已装好的模式保持原端口, REALITY_PORT 只改第一个模式 (见 assign_port)
+    local port; port="$(assign_port "$m" "$(inbound_value "$m" port)" "$first")" || die "模式 $m 端口分配失败"
+    [ -n "$port" ] || die "模式 $m 端口分配失败"
+    # Reality 凭据: 已装好的沿用, 新装的生成 (每个模式各用各的密钥)
+    local priv="" shortid=""
+    if mode_has_reality "$m"; then
+      priv="$(inbound_value "$m" priv)"
+      if [ -z "$priv" ]; then
+        local kp; kp="$(gen_keypair)"
+        priv="$(printf '%s' "$kp" | sed -n '1p')"
+      fi
+      shortid="$(inbound_value "$m" shortid)"
+      [ -n "$shortid" ] || shortid="$(openssl rand -hex 8 2>/dev/null || head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
     fi
-    local new_port; new_port="$(pick_free_port)"
-    warn "端口 $port 已被占用 (不是 Xray 自己), 自动改用未占用端口 $new_port (非 CF 反代端口)"
-    info "客户端配置将按 $new_port 生成, 请按输出的 QuanX 行 / vless 链接填"
-    port="$new_port"
-  fi
-
-  write_config "$uuid" "$priv" "$shortid" "$port" "$sni"
+    # Encryption 凭据: 已装好的沿用 decryption, 新装的用 xray vlessenc 生成
+    local dec="none"
+    if mode_has_enc "$m"; then
+      dec="$(inbound_value "$m" decryption)"
+      if [ -z "$dec" ] || [ "$dec" = "none" ]; then
+        local vp; vp="$(gen_vlessenc)" || die "模式 $m 生成 VLESS Encryption 密钥失败"
+        dec="$(printf '%s' "$vp" | sed -n '1p')"
+        [ -n "$dec" ] || die "模式 $m 生成 VLESS Encryption 密钥失败"
+      fi
+    fi
+    local inb; inb="$(inbound_json "$m" "$uuid" "$port" "$sni" "$priv" "$shortid" "$dec")" || die "模式 $m 生成入站配置失败"
+    upsert_inbound "$m" "$inb"
+    first=0
+  done
+  validate_config
 
   install_service
   start_service
   service_active || die "Xray 启动后未处于运行状态, 查日志: systemd 用 journalctl -u xray -n 50; OpenRC 用 rc-service xray status"
-  open_firewall "$port"
+  for m in $modes; do open_firewall "$(inbound_value "$m" port)"; done
   try_bbr
-  # 443 入站探活: 外面连不进来就自动换高端口, probe_fallback 只在 stdout 输出最终端口
-  port="$(probe_fallback "$uuid" "$priv" "$shortid" "$port" "$sni")"
-  show_info "$uuid" "$pub" "$shortid" "$port" "$sni"
+  # 443 入站探活: 哪个模式在 443 上就探哪个, 外面连不进来就自动换高端口,
+  # probe_fallback 只在 stdout 输出最终端口, 这里不需要, 重定向掉
+  for m in $modes; do
+    if [ "$(inbound_value "$m" port)" = "$DEFAULT_PORT" ]; then
+      probe_fallback "$m" >/dev/null
+    fi
+  done
+  show_all
 }
 
-show_info() { # $1=uuid $2=pubkey $3=shortid $4=port $5=sni
-  local uuid="$1" pub="$2" shortid="$3" port="$4" sni="$5"
-  local host="${REALITY_HOST:-$(public_ip)}"
-  # 节点名: 不指定 REALITY_TAG 时按 IP 所在地生成, 三个客户端名字各带自己的后缀
-  #   Surge: LA-Surge-Reality / QuanX: LA-Quanx-Reality / vless: LA-Reality
-  # 指定了 REALITY_TAG 则三处都用指定的名字; 所在地查不到则不带地区码前缀
-  local surge_name qx_name link_name
-  if [ -n "${REALITY_TAG:-}" ]; then
-    surge_name="$REALITY_TAG"; qx_name="$REALITY_TAG"; link_name="$REALITY_TAG"
-  else
-    local prefix; prefix="$(tag_prefix "$host")"
-    if [ -n "$prefix" ]; then
-      surge_name="${prefix}-Surge-Reality"; qx_name="${prefix}-Quanx-Reality"; link_name="${prefix}-Reality"
-    else
-      surge_name="Surge-Reality"; qx_name="Quanx-Reality"; link_name="Reality"
-    fi
+mode_client_config() { # $1=模式 $2=host $3=加括号的host $4=地区码前缀 $5=模式总数 ; 设置 MODE_* 全局变量
+  # 从配置里读该模式的凭据, 反推公钥 / 客户端 encryption 串, 拼出三处客户端配置。
+  local mode="$1" host="$2" bhost="$3" prefix="$4" count="$5"
+  MODE_UUID="$(inbound_value "$mode" uuid)"
+  MODE_PORT="$(inbound_value "$mode" port)"
+  MODE_SNI="$(inbound_value "$mode" sni)"
+  MODE_SHORTID="$(inbound_value "$mode" shortid)"
+  MODE_PUB=""; MODE_ENC=""; MODE_SURGE=""; MODE_QX=""; MODE_LINK=""
+  [ -n "$MODE_UUID" ] && [ -n "$MODE_PORT" ] || die "模式 $mode 配置不完整, 请重装"
+  if mode_has_reality "$mode"; then
+    local priv; priv="$(inbound_value "$mode" priv)"
+    MODE_PUB="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | extract_xray_public)"
+    [ -n "$MODE_PUB" ] || die "模式 $mode 私钥无法反推公钥, 请检查配置"
   fi
-  # vless:// 链接: pbk 是 base64url 公钥, 不用再转义; sid 16 位 hex; fp=chrome
-  local link="vless://${uuid}@${host}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${sni}&fp=chrome&pbk=${pub}&sid=${shortid}&type=tcp&headerType=none#${link_name}"
-  # QuanX 行: 按官方 sample.conf vless-tls-reality-vision-01 的写法,
-  # obfs=over-tls + obfs-host=<SNI>, 不带 fast-open (Reality 下必须关, 见文件头注释)
-  local qx="vless=${host}:${port}, method=none, password=${uuid}, obfs=over-tls, obfs-host=${sni}, reality-base64-pubkey=${pub}, reality-hex-shortid=${shortid}, vless-flow=xtls-rprx-vision, udp-relay=true, tag=${qx_name}"
-  # Surge 官方 VLESS 参数：REALITY 无需 tls=true，UDP relay 默认启用。
-  # 节点名中的分隔符会破坏 Surge 配置行，替换为空格。
+  if mode_has_enc "$mode"; then
+    local dec; dec="$(inbound_value "$mode" decryption)"
+    [ -n "$dec" ] && [ "$dec" != "none" ] || die "模式 $mode 配置里没有 VLESS Encryption 密钥, 请重装"
+    MODE_ENC="$(derive_encryption "$dec")"
+  fi
+  local surge_name link_name ubhost
+  surge_name="$(mode_display_name "$mode" surge "$prefix" "${REALITY_TAG:-}" "$count")"
+  link_name="$(mode_display_name "$mode" link "$prefix" "${REALITY_TAG:-}" "$count")"
+  # Surge 行的 host 是逗号分隔的字段, IPv6 写裸地址 (带方括号反而可能不识别)
+  ubhost="${host#[}"; ubhost="${ubhost%]}"
+  # Surge 行: 节点名里的分隔符会破坏配置行, 替换为空格
   local surge_tag="${surge_name//,/ }"
   surge_tag="${surge_tag//=/ }"
   surge_tag="${surge_tag//$'\n'/ }"
   surge_tag="${surge_tag//$'\r'/ }"
-  local surge="${surge_tag} = vless, ${host}, ${port}, username=${uuid}, flow=xtls-rprx-vision, sni=${sni}, reality-public-key=${pub}, reality-short-id=${shortid}"
-  # 二维码: vless:// 链接扫码即导入; 先生成 PNG, 再在终端打印一份
-  local qr_note=""
-  if command -v qrencode >/dev/null 2>&1; then
-    if qrencode -o "$CLIENT_PNG" -s 6 -m 2 "$link" 2>/dev/null; then
-      qr_note="二维码 PNG: $CLIENT_PNG (扫码即导入 vless://)"
-    else
-      qr_note="二维码: PNG 生成失败 (终端下方仍有二维码)"
-    fi
+  case "$mode" in
+    1)
+      local qx_name; qx_name="$(mode_display_name "$mode" qx "$prefix" "${REALITY_TAG:-}" "$count")"
+      MODE_SURGE="${surge_tag} = vless, ${ubhost}, ${MODE_PORT}, username=${MODE_UUID}, flow=xtls-rprx-vision, sni=${MODE_SNI}, reality-public-key=${MODE_PUB}, reality-short-id=${MODE_SHORTID}"
+      # QuanX 行: 按官方 sample.conf vless-tls-reality-vision-01 的写法,
+      # obfs=over-tls + obfs-host=<SNI>, 不带 fast-open (Reality 下必须关, 见文件头注释)
+      MODE_QX="vless=${bhost}:${MODE_PORT}, method=none, password=${MODE_UUID}, obfs=over-tls, obfs-host=${MODE_SNI}, reality-base64-pubkey=${MODE_PUB}, reality-hex-shortid=${MODE_SHORTID}, vless-flow=xtls-rprx-vision, udp-relay=true, tag=${qx_name}"
+      # vless:// 链接: pbk 是 base64url 公钥, 不用再转义; sid 16 位 hex; fp=chrome
+      MODE_LINK="vless://${MODE_UUID}@${bhost}:${MODE_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${MODE_SNI}&fp=chrome&pbk=${MODE_PUB}&sid=${MODE_SHORTID}&type=tcp&headerType=none#${link_name}"
+      ;;
+    2)
+      # 模式 2/3 只出 vless:// 链接: Surge 正式版与 QuanX 都不支持 VLESS Encryption,
+      # Surge Beta 用链接导入, 不拼未经验证的 Surge 配置行 (用户要求: 不支持就算了)
+      MODE_LINK="vless://${MODE_UUID}@${bhost}:${MODE_PORT}?encryption=${MODE_ENC}&security=none&type=tcp#${link_name}"
+      ;;
+    3)
+      MODE_LINK="vless://${MODE_UUID}@${bhost}:${MODE_PORT}?encryption=${MODE_ENC}&flow=xtls-rprx-vision&security=reality&sni=${MODE_SNI}&fp=chrome&pbk=${MODE_PUB}&sid=${MODE_SHORTID}&type=tcp&headerType=none#${link_name}"
+      ;;
+  esac
+}
+
+print_mode_block() { # $1=模式 $2=host $3=二维码说明 ; 纯打印, 不读配置不写文件
+  local mode="$1" host="$2" qr_note="$3"
+  case "$mode" in
+    1) printf '%s\n' "--- 模式 1: Reality 原版 (QuanX / Surge 正式版) ---" ;;
+    2) printf '%s\n' "--- 模式 2: VLESS Encryption (vless 链接导入) ---" ;;
+    3) printf '%s\n' "--- 模式 3: Reality + Vision + VLESS Encryption (vless 链接导入) ---" ;;
+  esac
+  if mode_has_reality "$mode"; then
+    printf '%s\n' "地址: ${host}:${MODE_PORT}  SNI/dest: ${MODE_SNI}  指纹: chrome (服务端不填, 客户端用)"
   else
-    qr_note="二维码: 未生成 (未装 qrencode; 装好后跑 bash reality show 补生成)"
+    printf '%s\n' "地址: ${host}:${MODE_PORT}  (无 Reality/TLS, 加密靠 VLESS Encryption)"
   fi
-  {
-    printf '%s\n' "Xray VLESS + REALITY + Vision"
-    printf '%s\n' "地址: ${host}:${port}  SNI/dest: ${sni}  指纹: chrome (服务端不填, 客户端用)"
-    printf '%s\n' ""
+  printf '%s\n' ""
+  if [ -n "$MODE_QX" ]; then
     printf '%s\n' "--- Quantumult X (推荐, 直接粘贴到 [server_local]) ---"
-    printf '%s\n' "$qx"
+    printf '%s\n' "$MODE_QX"
     printf '%s\n' ""
+  else
+    printf '%s\n' "Quantumult X / Surge 正式版: 不支持 VLESS Encryption; Surge Beta 可导入下面的 vless 链接"
+    printf '%s\n' ""
+  fi
+  if [ -n "$MODE_SURGE" ]; then
     printf '%s\n' "--- Surge (直接粘贴到 [Proxy]) ---"
-    printf '%s\n' "$surge"
+    printf '%s\n' "$MODE_SURGE"
     printf '%s\n' ""
-    printf '%s\n' "--- 通用 vless:// 链接 (其他客户端导入) ---"
-    printf '%s\n' "$link"
+  fi
+  printf '%s\n' "--- 通用 vless:// 链接 (其他客户端导入) ---"
+  printf '%s\n' "$MODE_LINK"
+  printf '%s\n' ""
+  printf '%s\n' "UUID: $MODE_UUID"
+  if [ -n "$MODE_PUB" ]; then
+    printf '%s\n' "公钥 pbk: $MODE_PUB"
+    printf '%s\n' "shortId: $MODE_SHORTID"
+  fi
+  [ -n "$MODE_ENC" ] && printf '%s\n' "Encryption: $MODE_ENC"
+  printf '%s\n' "$qr_note"
+  printf '%s\n' ""
+}
+
+show_all() { # 输出全部已装模式的客户端配置 (文件 + 终端 + 二维码)
+  [ -f "$CONFIG_FILE" ] || die "还没安装, 配置 $CONFIG_FILE 不存在"
+  local modes; modes="$(installed_modes)"
+  [ -n "$modes" ] || die "配置里没有脚本管理的节点, 请重装"
+  local host="${REALITY_HOST:-$(public_ip)}"
+  local bhost; bhost="$(bracket_host "$host")"
+  # 节点名: 不指定 REALITY_TAG 时按 IP 所在地生成, 各模式后缀不同以区分
+  local prefix=""; [ -z "${REALITY_TAG:-}" ] && prefix="$(tag_prefix "$host")"
+  local count; count="$(printf '%s' "$modes" | wc -w)"
+  local m png qr_note
+  # 先写文件 (主 shell 里跑, 配置有问题直接 die, 不会留下半截管道输出),
+  # 再把文件内容打到终端, 最后逐个模式打印二维码
+  : > "$CLIENT_FILE" || die "写客户端文件失败: $CLIENT_FILE"
+  {
+    printf '%s\n' "Xray VLESS 节点 (已装模式: $modes)"
     printf '%s\n' ""
-    printf '%s\n' "UUID: $uuid"
-    printf '%s\n' "公钥 pbk: $pub"
-    printf '%s\n' "shortId: $shortid"
-    printf '%s\n' "$qr_note"
+    for m in $modes; do
+      mode_client_config "$m" "$host" "$bhost" "$prefix" "$count"
+      png="$(mode_png "$m")"
+      qr_note=""
+      if command -v qrencode >/dev/null 2>&1; then
+        if qrencode -o "$png" -s 6 -m 2 "$MODE_LINK" 2>/dev/null; then
+          qr_note="二维码 PNG: $png (扫码即导入 vless://)"
+        else
+          qr_note="二维码: PNG 生成失败 (终端下方仍有二维码)"
+        fi
+      else
+        qr_note="二维码: 未生成 (未装 qrencode; 装好后跑 bash reality show 补生成)"
+      fi
+      print_mode_block "$m" "$host" "$qr_note"
+    done
     printf '%s\n' "私钥 (只存服务端, 别发给别人): 请看 $CONFIG_FILE"
-  } | tee "$CLIENT_FILE"
+  } >> "$CLIENT_FILE"
+  cat "$CLIENT_FILE"
   if command -v qrencode >/dev/null 2>&1; then
-    printf '%s\n' "--- 二维码 (扫 vless:// 链接, 手机客户端扫码导入) ---"
-    qrencode -t ANSIUTF8 "$link" 2>/dev/null || warn "终端二维码打印失败, 用上面保存的 PNG"
+    for m in $modes; do
+      mode_client_config "$m" "$host" "$bhost" "$prefix" "$count"
+      printf '%s\n' "--- 二维码 模式 $m (扫 vless:// 链接, 手机客户端扫码导入) ---"
+      qrencode -t ANSIUTF8 "$MODE_LINK" 2>/dev/null || warn "终端二维码打印失败, 用上面保存的 PNG"
+    done
   fi
   printf '\n'
   info "客户端配置已保存到 $CLIENT_FILE"
-  [ -f "$CLIENT_PNG" ] && info "二维码已保存到 $CLIENT_PNG"
-  info "QuanX 要求 1.5.5+；Surge 要求 iOS 6.0.0+ 或 Mac 6.12.0+ 支持此配置"
+  for m in $modes; do
+    png="$(mode_png "$m")"
+    [ -f "$png" ] && info "二维码已保存到 $png"
+  done
+  case " $modes " in *" 1 "*) info "模式 1: QuanX 要求 1.5.5+；Surge 要求 iOS 6.0.0+ 或 Mac 6.12.0+" ;; esac
+  case " $modes " in *" 2 "*|*" 3 "*) info "模式 2/3: 只出 vless 链接, Surge 需 Beta 版导入, QuanX 不支持" ;; esac
   warn "私钥在 $CONFIG_FILE 里, 别把配置文件 / 客户端文件发到公开地方"
 }
 
 do_show() {
   [ -f "$CONFIG_FILE" ] || die "还没安装, 配置 $CONFIG_FILE 不存在"
-  local uuid pub shortid port sni
-  uuid="$(existing_value uuid)"; port="$(existing_value port)"
-  sni="$(existing_value sni)"; shortid="$(existing_value shortid)"
-  local priv; priv="$(existing_value priv)"
-  pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | extract_xray_public)"
-  [ -n "$uuid" ] && [ -n "$pub" ] && [ -n "$shortid" ] || die "配置不完整, 请重装"
-  show_info "$uuid" "$pub" "$shortid" "$port" "$sni"
+  show_all
 }
 
-do_probe() { # 只测不改: 读当前配置, 从外面探一次端口通不通, 报告结果
+do_probe() { # 只测不改: 读当前配置, 从外面探每个模式的端口通不通, 报告结果
   [ -f "$CONFIG_FILE" ] || die "还没安装, 配置 $CONFIG_FILE 不存在, 先跑 bash reality install"
-  local port host
-  port="$(existing_value port)"
-  host="${REALITY_HOST:-$(public_ip)}"
-  [ -n "$port" ] || die "配置里读不到端口, 请检查 $CONFIG_FILE"
+  local host="${REALITY_HOST:-$(public_ip)}"
   if [ -z "$host" ] || is_private_target "$host"; then
     die "拿不到公网地址, 无法从外面探活; 用 REALITY_HOST=公网IP或域名 bash reality probe 指定"
   fi
-  info "探活: 从两个机房回连 ${host}:${port}..."
-  local verdict; verdict="$(probe_port_external "$host" "$port")"
-  case "$verdict" in
-    open) info "结果: 通, ${host}:${port} 外面连得进来" ;;
-    closed)
-      warn "结果: 不通, ${host}:${port} 从外面连不进来 (入站被堵或端口没监听)"
-      info "换个端口试试: REALITY_PORT=新端口 bash reality change-port (别用 CF 反代端口)"
-      ;;
-    *) warn "结果: 没结论, 探活服务没回有效结果, 请稍后重试或用客户端实测" ;;
-  esac
+  local modes; modes="$(installed_modes)"
+  [ -n "$modes" ] || die "配置里没有脚本管理的节点, 请检查 $CONFIG_FILE"
+  local m port verdict
+  for m in $modes; do
+    port="$(inbound_value "$m" port)"
+    [ -n "$port" ] || die "模式 $m 配置里读不到端口, 请检查 $CONFIG_FILE"
+    info "探活: 从两个机房回连 ${host}:${port} (模式 $m)..."
+    verdict="$(probe_port_external "$host" "$port")"
+    case "$verdict" in
+      open) info "结果: 通, ${host}:${port} 外面连得进来" ;;
+      closed)
+        warn "结果: 不通, ${host}:${port} 从外面连不进来 (入站被堵或端口没监听)"
+        info "换个端口试试: REALITY_PORT=新端口 REALITY_MODE=$m bash reality change-port (别用 CF 反代端口)"
+        ;;
+      *) warn "结果: 没结论, 探活服务没回有效结果, 请稍后重试或用客户端实测" ;;
+    esac
+  done
 }
 
-do_change_port() { # 只换端口: 域名/UUID/密钥/shortId 全不变, 旧端口的客户端配置作废
+do_change_port() { # 只换一个模式的端口: 域名/UUID/密钥/shortId 全不变, 其他模式不动
   need_root "$@"
   [ -f "$CONFIG_FILE" ] || die "还没安装, 配置 $CONFIG_FILE 不存在, 先跑 bash reality install"
   [ -n "${REALITY_PORT:-}" ] && validate_port "$REALITY_PORT"
   detect_os; install_deps; detect_init
   [ -x "$XRAY_BIN" ] || download_xray
 
-  local old_port old_sni old_uuid old_priv old_shortid pub
-  old_port="$(existing_value port)"; old_sni="$(existing_value sni)"
-  old_uuid="$(existing_value uuid)"; old_priv="$(existing_value priv)"
-  old_shortid="$(existing_value shortid)"
-  [ -n "$old_uuid" ] && [ -n "$old_priv" ] && [ -n "$old_port" ] || die "配置不完整, 请删配置重装"
+  local mode; mode="$(target_mode)" || die "选择模式失败"
+  local old_port old_sni
+  old_port="$(inbound_value "$mode" port)"; old_sni="$(inbound_value "$mode" sni)"
+  [ -n "$old_port" ] || die "模式 $mode 配置不完整, 请删配置重装"
 
   local new_port="${REALITY_PORT:-}" ans=""
   if [ -t 0 ]; then
-    printf '%s\n' "当前配置: 域名 $old_sni  端口 $old_port"
+    printf '%s\n' "当前: 模式 $mode  端口 $old_port${old_sni:+  域名 $old_sni}"
     printf '新端口 (回车保持 %s, 别用 CF 反代端口): ' "$old_port"; read -r ans
     [ -n "$ans" ] && new_port="$ans"
   fi
   [ -n "$new_port" ] || new_port="$old_port"
-  if [ "$new_port" = "$old_port" ]; then info "端口没变, 仍是 $old_port"; do_show; return 0; fi
+  if [ "$new_port" = "$old_port" ]; then info "端口没变, 仍是 $old_port"; show_all; return 0; fi
   validate_port "$new_port"
+  # 新端口撞上其他模式的端口直接拒绝, 一个端口只能给一个模式
+  local m2 p2
+  for m2 in $(installed_modes); do
+    [ "$m2" = "$mode" ] && continue
+    p2="$(inbound_value "$m2" port)"
+    [ "$p2" = "$new_port" ] && die "端口 $new_port 已被模式 $m2 占用, 一个端口只能给一个模式"
+  done
   if port_in_use "$new_port" && ! port_owner_is_xray "$new_port"; then
     die "端口 $new_port 已被占用, 请换一个未占用的端口"
   fi
-  pub="$("$XRAY_BIN" x25519 -i "$old_priv" 2>/dev/null | extract_xray_public)"
-  [ -n "$pub" ] || die "私钥无法反推公钥, 请检查配置"
 
-  write_config "$old_uuid" "$old_priv" "$old_shortid" "$new_port" "$old_sni"
+  backup_config
+  set_inbound_port "$mode" "$new_port"
+  validate_config
   stop_service
   start_service
   service_active || die "换端口后 Xray 未运行, 查日志: systemd 用 journalctl -u xray -n 50; OpenRC 用 rc-service xray status"
   open_firewall "$new_port"
   warn "旧端口 $old_port 的防火墙/安全组规则仍在, 不用了请手动关掉"
   try_bbr
-  info "端口已改: $old_port -> $new_port (域名、UUID、密钥、shortId 都没变, 只换端口)"
-  show_info "$old_uuid" "$pub" "$old_shortid" "$new_port" "$old_sni"
+  info "端口已改: $old_port -> $new_port (模式 $mode, 其余配置不变, 只换端口)"
+  show_all
 }
 
 scan_ranges() { # $1=本机公网 IPv4 ; 按优先级输出要扫的网段, 每行一个: 本机 /23、相邻上段 /23、相邻下段 /23
@@ -1015,8 +1427,22 @@ do_rescan_reinstall() { # 扫描邻居域名并重装: 只换 dest/SNI, UUID/密
     warn "扫了 $n 个网段都没扫到符合条件的推荐域名, 改用默认域名 $recommended 安装 (想换邻居域名可手动扫别的网段, 再用 REALITY_SNI=域名 重装)"
   fi
   validate_sni "$recommended"
-  # 重装: 已有配置的 UUID/私钥/端口/shortId 全部保留, 只换 SNI;
-  # 没装过就是全新安装, 用扫描到的域名做 dest/SNI
+  # 重装: 已有配置的 UUID/私钥/端口/shortId 全部保留, 只换 Reality 模式的 SNI;
+  # 没装过就是全新安装, 用扫描到的域名做 dest/SNI。
+  # 已装时把 REALITY_MODES 锁成已装的模式, do_install 就不问模式、也不丢模式;
+  # 只装了模式 2 (没 Reality) 时没域名可扫, 直接停下。
+  local rescan_modes=""
+  if [ -f "$CONFIG_FILE" ]; then
+    rescan_modes="$(installed_modes)"
+    if [ -n "$rescan_modes" ]; then
+      local rm2 has_reality=0
+      for rm2 in $rescan_modes; do mode_has_reality "$rm2" && has_reality=1; done
+      [ "$has_reality" = "1" ] || die "只装了 VLESS Encryption 模式 (模式 2), 没有 Reality 域名可扫, rescan 用不上"
+      REALITY_MODES="$rescan_modes" REALITY_SNI="$recommended" do_install "$@"
+      info "已用域名 $recommended 重装, 旧域名对应的客户端配置作废, 请用上面新的"
+      return 0
+    fi
+  fi
   REALITY_SNI="$recommended" do_install "$@"
   info "已用域名 $recommended 重装, 旧域名对应的客户端配置作废, 请用上面新的"
 }
@@ -1029,49 +1455,70 @@ do_reconfig() {
   detect_os; install_deps; detect_init
   [ -x "$XRAY_BIN" ] || download_xray
 
-  local old_port old_sni old_uuid old_priv old_shortid
-  old_port="$(existing_value port)"; old_sni="$(existing_value sni)"
-  old_uuid="$(existing_value uuid)"; old_priv="$(existing_value priv)"
-  old_shortid="$(existing_value shortid)"
-  [ -n "$old_uuid" ] && [ -n "$old_priv" ] || die "配置不完整, 请删配置重装"
+  local mode; mode="$(target_mode)" || die "选择模式失败"
+  local old_port old_sni old_uuid old_priv old_shortid old_dec
+  old_port="$(inbound_value "$mode" port)"; old_sni="$(inbound_value "$mode" sni)"
+  old_uuid="$(inbound_value "$mode" uuid)"; old_priv="$(inbound_value "$mode" priv)"
+  old_shortid="$(inbound_value "$mode" shortid)"; old_dec="$(inbound_value "$mode" decryption)"
+  [ -n "$old_uuid" ] && [ -n "$old_port" ] || die "模式 $mode 配置不完整, 请删配置重装"
+  local is_reality=0 is_enc=0
+  mode_has_reality "$mode" && is_reality=1
+  mode_has_enc "$mode" && is_enc=1
 
   local new_sni="${REALITY_SNI:-}" new_port="${REALITY_PORT:-}" ans=""
   local regen_keys="${REALITY_REGEN_KEYS:-0}" regen_uuid="${REALITY_REGEN_UUID:-0}"
   if [ -t 0 ]; then
-    printf '%s\n' "当前配置: 域名 $old_sni  端口 $old_port  UUID $old_uuid"
-    printf '新伪装域名 (回车保持 %s): ' "$old_sni"; read -r ans; [ -n "$ans" ] && new_sni="$ans"
+    printf '%s\n' "当前: 模式 $mode  端口 $old_port  UUID $old_uuid${old_sni:+  域名 $old_sni}"
+    if [ "$is_reality" = "1" ]; then
+      printf '新伪装域名 (回车保持 %s): ' "$old_sni"; read -r ans; [ -n "$ans" ] && new_sni="$ans"
+    fi
     printf '新端口 (回车保持 %s, 别用 CF 反代端口): ' "$old_port"; read -r ans; [ -n "$ans" ] && new_port="$ans"
-    printf '重新生成密钥 (新私钥/公钥 + 新 shortId)? [y/N]: '; read -r ans
+    printf '重新生成密钥 (新私钥/公钥 + 新 shortId / 新 Encryption 密钥)? [y/N]: '; read -r ans
     case "$ans" in y|Y|yes|YES) regen_keys=1 ;; esac
     if [ "$regen_keys" = "1" ]; then
       printf '同时换 UUID? [y/N]: '; read -r ans
       case "$ans" in y|Y|yes|YES) regen_uuid=1 ;; esac
     fi
   elif [ -z "$new_sni" ] && [ -z "$new_port" ] && [ "$regen_keys" != "1" ] && [ "$regen_uuid" != "1" ]; then
-    die "非交互下改配置请给环境变量: REALITY_SNI=新域名 / REALITY_PORT=新端口 / REALITY_REGEN_KEYS=1 (换密钥) / REALITY_REGEN_UUID=1 (换 UUID)"
+    die "非交互下改配置请给环境变量: REALITY_SNI=新域名 / REALITY_PORT=新端口 / REALITY_REGEN_KEYS=1 (换密钥) / REALITY_REGEN_UUID=1 (换 UUID), 多模式时再加 REALITY_MODE=1/2/3"
   fi
   [ -n "$new_sni" ] || new_sni="$old_sni"
   [ -n "$new_port" ] || new_port="$old_port"
-  validate_port "$new_port"; validate_sni "$new_sni"
-  if [ "$new_port" != "$old_port" ] && port_in_use "$new_port" && ! port_owner_is_xray "$new_port"; then
-    die "端口 $new_port 已被占用, 请换一个未占用的端口"
+  validate_port "$new_port"
+  [ "$is_reality" = "1" ] && validate_sni "$new_sni"
+  # 新端口撞上其他模式的端口直接拒绝, 一个端口只能给一个模式
+  if [ "$new_port" != "$old_port" ]; then
+    local m2 p2
+    for m2 in $(installed_modes); do
+      [ "$m2" = "$mode" ] && continue
+      p2="$(inbound_value "$m2" port)"
+      [ "$p2" = "$new_port" ] && die "端口 $new_port 已被模式 $m2 占用, 一个端口只能给一个模式"
+    done
+    if port_in_use "$new_port" && ! port_owner_is_xray "$new_port"; then
+      die "端口 $new_port 已被占用, 请换一个未占用的端口"
+    fi
   fi
 
-  local uuid="$old_uuid" priv="$old_priv" shortid="$old_shortid" pub=""
+  local uuid="$old_uuid" priv="$old_priv" shortid="$old_shortid" dec="$old_dec"
   if [ "$regen_keys" = "1" ]; then
-    local kp; kp="$(gen_keypair)"
-    priv="$(printf '%s' "$kp" | sed -n '1p')"
-    pub="$(printf '%s' "$kp" | sed -n '2p')"
-    shortid="$(openssl rand -hex 8 2>/dev/null || head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-    info "已重新生成密钥与 shortId"
+    if [ "$is_reality" = "1" ]; then
+      local kp; kp="$(gen_keypair)"
+      priv="$(printf '%s' "$kp" | sed -n '1p')"
+      shortid="$(openssl rand -hex 8 2>/dev/null || head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    fi
+    if [ "$is_enc" = "1" ]; then
+      local vp; vp="$(gen_vlessenc)" || die "重新生成 VLESS Encryption 密钥失败"
+      dec="$(printf '%s' "$vp" | sed -n '1p')"
+      [ -n "$dec" ] || die "重新生成 VLESS Encryption 密钥失败"
+    fi
+    info "已重新生成密钥"
   fi
   if [ "$regen_uuid" = "1" ]; then uuid="$(gen_uuid)"; info "已重新生成 UUID"; fi
-  if [ -z "$pub" ]; then
-    pub="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | extract_xray_public)"
-    [ -n "$pub" ] || die "私钥无法反推公钥, 请检查配置"
-  fi
 
-  write_config "$uuid" "$priv" "$shortid" "$new_port" "$new_sni"
+  backup_config
+  local inb; inb="$(inbound_json "$mode" "$uuid" "$new_port" "$new_sni" "$priv" "$shortid" "$dec")" || die "生成入站配置失败"
+  upsert_inbound "$mode" "$inb"
+  validate_config
   stop_service
   start_service
   service_active || die "改配置后 Xray 未运行, 查日志: systemd 用 journalctl -u xray -n 50; OpenRC 用 rc-service xray status"
@@ -1080,17 +1527,23 @@ do_reconfig() {
     warn "旧端口 $old_port 的防火墙/安全组规则仍在, 不用了请手动关掉"
   fi
   try_bbr
-  info "配置已改: 域名 $old_sni -> $new_sni, 端口 $old_port -> $new_port"
-  [ "$regen_keys" = "1" ] && warn "密钥已换, 旧的 QuanX 行 / 链接 / 二维码全部作废, 请用下面新的"
-  show_info "$uuid" "$pub" "$shortid" "$new_port" "$new_sni"
+  if [ "$is_reality" = "1" ]; then
+    info "配置已改: 模式 $mode, 域名 $old_sni -> $new_sni, 端口 $old_port -> $new_port"
+  else
+    info "配置已改: 模式 $mode, 端口 $old_port -> $new_port"
+  fi
+  [ "$regen_keys" = "1" ] && warn "密钥已换, 旧的客户端配置全部作废, 请用下面新的"
+  show_all
 }
 
 do_uninstall() {
   need_root "$@"
   detect_os; detect_init
-  local purge=0 a old_port=""
+  local purge=0 a all_ports=""
   for a in "$@"; do [ "$a" = "--purge" ] && purge=1; done
-  [ -f "$CONFIG_FILE" ] && old_port="$(existing_value port)"
+  if [ -f "$CONFIG_FILE" ] && command -v jq >/dev/null 2>&1; then
+    all_ports="$(jq -r '.inbounds[]?.port // empty' "$CONFIG_FILE" 2>/dev/null)"
+  fi
   stop_service
   case "$INIT" in
     systemd)
@@ -1105,9 +1558,10 @@ do_uninstall() {
   esac
   rm -f "$XRAY_BIN"
   if [ "$purge" = "1" ]; then
-    rm -rf "$CONFIG_DIR" "$CLIENT_FILE" "$CLIENT_PNG" /usr/local/share/xray
-    if [ -n "$old_port" ] && command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'active'; then
-      ufw delete allow "$old_port/tcp" >/dev/null 2>&1 || true
+    rm -rf "$CONFIG_DIR" "$CLIENT_FILE" "$(mode_png 1)" "$(mode_png 2)" "$(mode_png 3)" /usr/local/share/xray
+    if [ -n "$all_ports" ] && command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'active'; then
+      local p
+      for p in $all_ports; do ufw delete allow "$p/tcp" >/dev/null 2>&1 || true; done
     fi
     info "已彻底卸载 (含配置、客户端文件与二维码)"
   else
@@ -1133,39 +1587,121 @@ do_status() {
   detect_os 2>/dev/null || true
   [ -x "$XRAY_BIN" ] && info "Xray: $($XRAY_BIN version 2>/dev/null | head -1)" || info "Xray: 未安装"
   [ -f "$CONFIG_FILE" ] && info "配置: $CONFIG_FILE" || info "配置: 无"
+  if [ -f "$CONFIG_FILE" ]; then
+    local m
+    for m in $(installed_modes); do
+      info "模式 $m: 端口 $(inbound_value "$m" port)"
+    done
+  fi
   detect_init
   if service_active; then info "服务: 运行中"; else warn "服务: 未运行"; fi
+}
+
+do_restart() {
+  need_root "$@"
+  detect_init
+  start_service
+  if service_active; then info "服务已重启"; else warn "重启失败, 查日志: bash reality logs"; return 1; fi
+}
+
+do_logs() { # 实时日志: systemd 跟 journalctl, 其他跟 /var/log/xray.log; Ctrl+C 返回
+  [ -f "$CONFIG_FILE" ] || { warn "还没安装, 没有日志可看"; return 0; }
+  detect_init >/dev/null 2>&1 || true
+  case "$INIT" in
+    systemd)
+      info "实时日志 (Ctrl+C 退出):"
+      trap 'trap - INT; return 0' INT
+      journalctl -u "$SERVICE_NAME" -f --no-pager 2>/dev/null
+      local st=$?
+      trap - INT
+      [ "$st" = "0" ] || [ "$st" = "130" ] || warn "读日志失败, 服务可能还没装"
+      ;;
+    *)
+      if [ -f /var/log/xray.log ]; then
+        info "实时日志 (Ctrl+C 退出):"
+        trap 'trap - INT; return 0' INT
+        tail -f /var/log/xray.log
+        trap - INT
+      else
+        warn "没有持久日志文件; OpenRC 看状态用: rc-service xray status"
+      fi
+      ;;
+  esac
+}
+
+do_remove_mode() { # 卸掉一个模式, 其他模式不动; 只剩一个模式时拒绝, 请用完全卸载
+  need_root "$@"
+  [ -f "$CONFIG_FILE" ] || die "还没安装, 配置 $CONFIG_FILE 不存在"
+  detect_os; detect_init
+  local modes; modes="$(installed_modes)"
+  [ -n "$modes" ] || die "配置里没有脚本管理的节点"
+  [ "$(printf '%s' "$modes" | wc -w)" -gt 1 ] || die "只装了一个模式, 卸掉它等于全卸, 请用菜单 5 完全卸载 (或 bash reality uninstall --purge)"
+  local mode="" a
+  for a in "$@"; do case "$a" in 1|2|3) mode="$a" ;; esac; done
+  [ -n "$mode" ] || mode="${REALITY_MODE:-}"
+  if [ -n "$mode" ]; then
+    printf '%s' "$modes" | grep -qw "$mode" || die "模式 $mode 还没安装, 已装模式: $modes"
+  else
+    mode="$(target_mode)" || die "选择模式失败"
+  fi
+  if [ -t 0 ]; then
+    local ans=""
+    printf '卸掉模式 %s? 它的客户端配置作废, 其他模式不受影响。输入 yes 确认: ' "$mode"
+    read -r ans
+    case "$ans" in yes|YES) ;; *) info "已取消, 什么都没删"; return 0 ;; esac
+  fi
+  backup_config
+  remove_inbound "$mode"
+  validate_config
+  stop_service
+  start_service
+  service_active || die "卸载模式 $mode 后 Xray 未运行, 查日志: systemd 用 journalctl -u xray -n 50; OpenRC 用 rc-service xray status"
+  info "模式 $mode 已卸载, 其余模式不受影响"
+  show_all
 }
 
 menu() {
   # 安装完 / 二次运行都进这个菜单, 选完一项后回到菜单, 直到选 0 退出
   while true; do
-    printf '%s\n' "Xray VLESS + REALITY (Surge / QuanX) 一键脚本"
+    printf '%s\n' "Xray VLESS 多模式一键脚本 (Surge / QuanX)"
     if [ -f "$CONFIG_FILE" ]; then
-      printf '%s\n' "  已安装: 域名 $(existing_value sni)  端口 $(existing_value port)"
+      local msum="" m
+      for m in $(installed_modes); do msum="$msum 模式$m(端口$(inbound_value "$m" port))"; done
+      if [ -n "$msum" ]; then
+        printf '%s\n' "  已安装:$msum"
+      else
+        printf '%s\n' "  配置存在, 但没有脚本管理的节点"
+      fi
     else
-      printf '%s\n' "  还没安装: 选 2 扫描域名并安装, 或用 bash reality install 直接装"
+      printf '%s\n' "  还没安装: 选 4 安装节点 (回车=全部模式), 或用 bash reality install 直接装"
     fi
     printf '%s\n' "  1) 查看客户端配置 (Surge / QuanX / vless://)"
     printf '%s\n' "  2) 重新安装并扫描 Reality 域名 (扫邻居网段, 只换 dest/SNI)"
-    printf '%s\n' "  3) 更换 Reality 端口 (只换端口, 域名/密钥不变)"
-    printf '%s\n' "  4) 完全卸载 (删程序 + 配置 + 客户端文件, 需确认)"
+    printf '%s\n' "  3) 更换端口 (只换端口, 其余不变; 多模式时先选模式)"
+    printf '%s\n' "  4) 安装/添加节点 (多选: 回车=全部, 如 1,3; 已装的模式保留凭据)"
+    printf '%s\n' "  5) 完全卸载 (删程序 + 配置 + 客户端文件, 需确认)"
+    printf '%s\n' "  6) 查看实时日志 (Ctrl+C 返回菜单)"
+    printf '%s\n' "  7) 重启服务"
     printf '%s\n' "  0) 退出"
-    printf '请选择 [1-4/0]: '
+    printf '请选择 [1-7/0]: '
     read -r choice || exit 0
     case "$choice" in
       1) do_show ;;
       2) do_rescan_reinstall "$@" ;;
       3) do_change_port "$@" ;;
-      4) printf '完全卸载会删掉 Xray 程序、服务、配置、客户端文件和二维码, 旧节点彻底作废。输入 yes 确认: '
+      4) local sel=""; sel="$(prompt_modes)" || { warn "已取消"; printf '%s\n' ""; continue; }
+         REALITY_MODES="$sel" do_install "$@" ;;
+      5) printf '完全卸载会删掉 Xray 程序、服务、配置、客户端文件和二维码, 旧节点彻底作废。输入 yes 确认: '
          read -r ans
          case "$ans" in
            yes|YES) do_uninstall "$@" --purge ;;
            *) info "已取消, 什么都没删" ;;
          esac
          ;;
+      6) do_logs ;;
+      7) do_restart "$@" || true ;;
       0) exit 0 ;;
-      *) warn "无效选择: $choice, 请选 1-4 或 0" ;;
+      *) warn "无效选择: $choice, 请选 1-7 或 0" ;;
     esac
     printf '%s\n' ""
   done
@@ -1178,23 +1714,29 @@ case "${1:-}" in
   change-port|changeport) do_change_port "$@" ;;
   reconfig|change) do_reconfig "$@" ;;
   update|upgrade) do_update "$@" ;;
-  restart) need_root "$@"; detect_init; start_service; service_active && info "服务已重启" || die "重启失败" ;;
+  restart) do_restart "$@" || exit 1 ;;
   status) do_status ;;
   probe) do_probe ;;
+  logs|log) do_logs ;;
+  remove-mode) do_remove_mode "$@" ;;
   uninstall|remove) do_uninstall "$@" ;;
   -h|--help|help)
-    printf '%s\n' "用法: bash reality [install|show|rescan|change-port|reconfig|update|restart|status|probe|uninstall [--purge]]"
-    printf '%s\n' "无参数时: 有终端进菜单 (1 查看配置 / 2 扫描重装 / 3 换端口 / 4 完全卸载), 无终端 (管道/重定向) 直接安装"
-    printf '%s\n' "show: 输出 Surge 行 + QuanX 行 + vless:// 链接 + 二维码"
-    printf '%s\n' "probe: 只测不改, 从两个机房回连当前端口, 报告外面能不能连进来"
+    printf '%s\n' "用法: bash reality [install|show|rescan|change-port|reconfig|update|restart|status|probe|logs|remove-mode|uninstall [--purge]]"
+    printf '%s\n' "无参数时: 有终端进菜单 (1 查看配置 / 2 扫描重装 / 3 换端口 / 4 安装添加节点 / 5 完全卸载 / 6 实时日志 / 7 重启), 无终端 (管道/重定向) 直接安装"
+    printf '%s\n' "模式: 1 Reality 原版 (QuanX/Surge) / 2 VLESS Encryption (链接导入) / 3 推荐组合 Reality+Encryption (链接导入); 安装时多选, 如 REALITY_MODES=1,3, 回车=全部"
+    printf '%s\n' "端口: 模式 3 默认 443, 模式 1/2 默认 10000-30000 高端口; REALITY_PORT 只改第一个模式的端口"
+    printf '%s\n' "show: 输出各模式的客户端配置 (模式 1: Surge 行 + QuanX 行 + vless 链接; 模式 2/3: 只有 vless 链接) + 二维码"
+    printf '%s\n' "probe: 只测不改, 从两个机房回连各模式的端口, 报告外面能不能连进来"
     printf '%s\n' "安装完 443 会自动探活, 两个机房都连不进来就自动换高端口; REALITY_SKIP_PROBE=1 可关掉探活"
-    printf '%s\n' "rescan: 扫描邻居网段, 用推荐域名重装 (只换 dest/SNI, UUID/密钥/端口不变; 扫不到改用 www.apple.com)"
-    printf '%s\n' "change-port: 只换端口, 域名/密钥不变; 非交互用 REALITY_PORT=新端口 bash reality change-port"
-    printf '%s\n' "reconfig: 改伪装域名 / 端口 / 重新生成密钥, 旧的客户端配置作废"
+    printf '%s\n' "rescan: 扫描邻居网段, 用推荐域名重装 (只换 Reality 模式的 dest/SNI, UUID/密钥/端口不变; 扫不到改用 www.apple.com; 只装模式 2 时没域名可扫)"
+    printf '%s\n' "change-port: 只换一个模式的端口, 其余不变; 非交互用 REALITY_PORT=新端口 bash reality change-port, 多模式时再加 REALITY_MODE=1/2/3"
+    printf '%s\n' "reconfig: 改一个模式的伪装域名 / 端口 / 重新生成密钥, 旧的客户端配置作废; 多模式时加 REALITY_MODE=1/2/3"
+    printf '%s\n' "remove-mode: 卸掉一个模式, 其他模式不动; 用法: bash reality remove-mode 2 或 REALITY_MODE=2 bash reality remove-mode"
+    printf '%s\n' "logs: 查看实时日志 (Ctrl+C 退出)"
     printf '%s\n' "uninstall: 只卸程序、保留配置; uninstall --purge: 彻底卸载, 配置/客户端文件/二维码一起删"
-    printf '%s\n' "安装时有终端会提示自选伪装域名, 回车保持默认/当前; 非交互用 REALITY_SNI=域名指定"
-    printf '%s\n' "环境变量: REALITY_PORT REALITY_SNI REALITY_TAG REALITY_HOST REALITY_UUID XRAY_VERSION REALITY_SKIP_PROBE"
-    printf '%s\n' "改配置非交互: REALITY_SNI=.. REALITY_PORT=.. REALITY_REGEN_KEYS=1 REALITY_REGEN_UUID=1 bash reality reconfig"
+    printf '%s\n' "安装时有终端会提示选模式 (回车=全部) 和自选伪装域名, 回车保持默认/当前; 非交互用 REALITY_MODES=1,3 与 REALITY_SNI=域名指定"
+    printf '%s\n' "环境变量: REALITY_MODES REALITY_MODE REALITY_PORT REALITY_SNI REALITY_TAG REALITY_HOST REALITY_UUID XRAY_VERSION REALITY_SKIP_PROBE"
+    printf '%s\n' "改配置非交互: REALITY_SNI=.. REALITY_PORT=.. REALITY_REGEN_KEYS=1 REALITY_REGEN_UUID=1 REALITY_MODE=.. bash reality reconfig"
     ;;
   *) die "未知命令: $1, 用 bash reality --help 看用法" ;;
 esac

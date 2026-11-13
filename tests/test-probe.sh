@@ -133,29 +133,43 @@ probe_case unknown unknown unknown
 probe_case open unknown open
 printf '%s\n' '双节点判定测试通过'
 
-# ---- 4) probe_fallback: 堵了就换高端口, 配置其余部分不变, stdout 只有端口号 ----
+# ---- 4) probe_fallback <模式>: 堵了只换该模式的端口, 另一模式不动, stdout 只有端口号 ----
+# 双入站夹具: 模式 3 在 443, 模式 1 在高端口; 模式 3 的 decryption 是假值 (假 xray 不校验),
+# §9 用真 xray 校验前会换成真值。
+DEC43="mlkem768x25519plus.native.600s.$(printf 'A%.0s' $(seq 1 43))"
+jq -n --arg dec "$DEC43" '{inbounds: [
+  {tag: "vless-reality", port: 24431, protocol: "vless",
+   settings: {clients: [{id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", flow: "xtls-rprx-vision"}], decryption: "none"},
+   streamSettings: {network: "tcp", security: "reality",
+     realitySettings: {show: false, target: "www.amazon.com:443", xver: 0, serverNames: ["www.amazon.com"], privateKey: "cHJpdl9leGFtcGxl", shortIds: ["0123456789abcdef"]}}},
+  {tag: "vless-reality-enc", port: 443, protocol: "vless",
+   settings: {clients: [{id: "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee", flow: "xtls-rprx-vision"}], decryption: $dec},
+   streamSettings: {network: "tcp", security: "reality",
+     realitySettings: {show: false, target: "www.amazon.com:443", xver: 0, serverNames: ["www.amazon.com"], privateKey: "cHJpdl9leGFtcGxl", shortIds: ["0123456789abcdef"]}}}
+], outbounds: [{protocol: "freedom", tag: "direct"}, {protocol: "blackhole", tag: "block"}]}' > "$tmp/config-two.json"
 cat > "$tmp/verdict-stub.sh" <<'VSTUB'
-probe_port_external() { [ -n "${ARGS_LOG:-}" ] && printf 'probe_port_external\n' >> "$ARGS_LOG"; printf '%s' "$VERDICT"; }
+probe_port_external() { [ -n "${ARGS_LOG:-}" ] && printf 'probe_port_external %s %s\n' "$@" >> "$ARGS_LOG"; printf '%s' "$VERDICT"; }
 probe_one_node() { [ -n "${ARGS_LOG:-}" ] && printf '%s %s %s\n' "$@" >> "$ARGS_LOG"; printf '%s' "$VERDICT2"; }
 VSTUB
-fallback_case() { # $1=verdict $2=verdict2 ; 跑一次 probe_fallback, 输出 stdout/stderr/配置到 $tmp/fb.*
+fallback_case() { # $1=verdict $2=verdict2 ; 跑一次 probe_fallback 3, 输出 stdout/stderr/配置到 $tmp/fb.*
   local v="$1" v2="$2"
-  cp "$tmp/config-orig.json" "$tmp/xray-etc/config.json"
+  cp "$tmp/config-two.json" "$tmp/xray-etc/config.json"
   rm -f "$tmp/fb.args"
   VERDICT="$v" VERDICT2="$v2" ARGS_LOG="$tmp/fb.args" bash -c '
     source "$1" "$2"; source "$3"
-    probe_fallback "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" "cHJpdl9leGFtcGxl" "0123456789abcdef" "443" "www.amazon.com" > "$4/fb.stdout" 2> "$4/fb.stderr"
+    probe_fallback 3 > "$4/fb.stdout" 2> "$4/fb.stderr"
   ' _ "$tmp/harness.sh" "$tmp" "$tmp/verdict-stub.sh" "$tmp" || { echo 'FAIL: probe_fallback 退出了'; cat "$tmp/fb.stderr"; exit 1; }
 }
 fallback_case closed open
 new_port="$(cat "$tmp/fb.stdout")"
 case "$new_port" in ''|*[!0-9]*) echo "FAIL: fallback 输出的不是纯端口号: [$new_port]"; exit 1 ;; esac
 [ "$new_port" -ge 10000 ] && [ "$new_port" -le 30000 ] || { echo "FAIL: fallback 换的端口 $new_port 不在 10000-30000"; exit 1; }
-[ "$(jq -r '.inbounds[0].port' "$tmp/xray-etc/config.json")" = "$new_port" ] || { echo 'FAIL: 配置端口没换成新端口'; exit 1; }
-[ "$(jq -r '.inbounds[0].settings.clients[0].id' "$tmp/xray-etc/config.json")" = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" ] || { echo 'FAIL: fallback 时 UUID 被改了'; exit 1; }
-[ "$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$tmp/xray-etc/config.json")" = "cHJpdl9leGFtcGxl" ] || { echo 'FAIL: fallback 时私钥被改了'; exit 1; }
-[ "$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$tmp/xray-etc/config.json")" = "0123456789abcdef" ] || { echo 'FAIL: fallback 时 shortId 被改了'; exit 1; }
-[ "$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$tmp/xray-etc/config.json")" = "www.amazon.com" ] || { echo 'FAIL: fallback 时域名被改了'; exit 1; }
+[ "$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .port' "$tmp/xray-etc/config.json")" = "$new_port" ] || { echo 'FAIL: 模式 3 端口没换成新端口'; exit 1; }
+[ "$(jq -r '.inbounds[] | select(.tag=="vless-reality") | .port' "$tmp/xray-etc/config.json")" = "24431" ] || { echo 'FAIL: fallback 时模式 1 的端口被动了'; exit 1; }
+[ "$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .settings.clients[0].id' "$tmp/xray-etc/config.json")" = "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee" ] || { echo 'FAIL: fallback 时 UUID 被改了'; exit 1; }
+[ "$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .streamSettings.realitySettings.privateKey' "$tmp/xray-etc/config.json")" = "cHJpdl9leGFtcGxl" ] || { echo 'FAIL: fallback 时私钥被改了'; exit 1; }
+[ "$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .streamSettings.realitySettings.shortIds[0]' "$tmp/xray-etc/config.json")" = "0123456789abcdef" ] || { echo 'FAIL: fallback 时 shortId 被改了'; exit 1; }
+[ "$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .streamSettings.realitySettings.serverNames[0]' "$tmp/xray-etc/config.json")" = "www.amazon.com" ] || { echo 'FAIL: fallback 时域名被改了'; exit 1; }
 grep -Fq "端口已改: 443 -> $new_port" "$tmp/fb.stderr" || { echo 'FAIL: fallback 没报端口变化'; cat "$tmp/fb.stderr"; exit 1; }
 grep -Fq "探活确认: 203.0.113.1:${new_port} 外面连得进来" "$tmp/fb.stderr" || { echo 'FAIL: fallback 后没确认新端口'; cat "$tmp/fb.stderr"; exit 1; }
 cp "$tmp/xray-etc/config.json" "$tmp/config-fallback.json"
@@ -164,40 +178,40 @@ printf '%s\n' '探活 fallback 换端口测试通过'
 # 通 / 没结论时保持 443, 配置不动
 fallback_case open open
 [ "$(cat "$tmp/fb.stdout")" = "443" ] || { echo 'FAIL: 探活通时端口被改了'; exit 1; }
-cmp -s "$tmp/xray-etc/config.json" "$tmp/config-orig.json" || { echo 'FAIL: 探活通时配置被改了'; exit 1; }
+cmp -s "$tmp/xray-etc/config.json" "$tmp/config-two.json" || { echo 'FAIL: 探活通时配置被改了'; exit 1; }
 fallback_case unknown unknown
 [ "$(cat "$tmp/fb.stdout")" = "443" ] || { echo 'FAIL: 探活没结论时端口被改了'; exit 1; }
-cmp -s "$tmp/xray-etc/config.json" "$tmp/config-orig.json" || { echo 'FAIL: 探活没结论时配置被改了'; exit 1; }
+cmp -s "$tmp/xray-etc/config.json" "$tmp/config-two.json" || { echo 'FAIL: 探活没结论时配置被改了'; exit 1; }
 printf '%s\n' '探活通/没结论保持 443 测试通过'
 
-# ---- 5) 不探活的几种情况: SKIP 开关 / 非 443 端口 / 内网地址, 探活函数一次都不该被调 ----
-no_probe_case() { # $1=描述 ; VERDICT/VERDICT2/ARGS_LOG/REALITY_SKIP_PROBE/REALITY_HOST/FB_PORT 由调用方指定
-  local desc="$1"
-  cp "$tmp/config-orig.json" "$tmp/xray-etc/config.json"
+# ---- 5) 不探活的几种情况: SKIP 开关 / 模式不在 443 上 / 内网地址, 探活函数一次都不该被调 ----
+no_probe_case() { # $1=描述 $2=模式 ; VERDICT/VERDICT2/ARGS_LOG/REALITY_SKIP_PROBE/REALITY_HOST 由调用方指定
+  local desc="$1" mode="$2"
+  cp "$tmp/config-two.json" "$tmp/xray-etc/config.json"
   rm -f "$tmp/fb.args"
   env "VERDICT=${VERDICT:-}" "VERDICT2=${VERDICT2:-}" "ARGS_LOG=${ARGS_LOG:-}" \
       "REALITY_SKIP_PROBE=${REALITY_SKIP_PROBE:-0}" "REALITY_HOST=${REALITY_HOST:-203.0.113.1}" \
-      "FB_PORT=${FB_PORT:-443}" bash -c '
+      bash -c '
     source "$1" "$2"; source "$3"
-    probe_fallback "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" "cHJpdl9leGFtcGxl" "0123456789abcdef" "${FB_PORT:-443}" "www.amazon.com" > "$4/fb.stdout" 2> "$4/fb.stderr"
-  ' _ "$tmp/harness.sh" "$tmp" "$tmp/verdict-stub.sh" "$tmp" || { echo "FAIL: $desc 时 probe_fallback 退出了"; exit 1; }
+    probe_fallback "$5" > "$4/fb.stdout" 2> "$4/fb.stderr"
+  ' _ "$tmp/harness.sh" "$tmp" "$tmp/verdict-stub.sh" "$tmp" "$mode" || { echo "FAIL: $desc 时 probe_fallback 退出了"; exit 1; }
   [ -f "$tmp/fb.args" ] && { echo "FAIL: $desc 时不该调探活, 却调了"; exit 1; }
-  cmp -s "$tmp/xray-etc/config.json" "$tmp/config-orig.json" || { echo "FAIL: $desc 时配置被改了"; exit 1; }
+  cmp -s "$tmp/xray-etc/config.json" "$tmp/config-two.json" || { echo "FAIL: $desc 时配置被改了"; exit 1; }
 }
-VERDICT=closed VERDICT2=open ARGS_LOG="$tmp/fb.args" REALITY_SKIP_PROBE=1 no_probe_case "SKIP 开关"
+VERDICT=closed VERDICT2=open ARGS_LOG="$tmp/fb.args" REALITY_SKIP_PROBE=1 no_probe_case "SKIP 开关" 3
 [ "$(cat "$tmp/fb.stdout")" = "443" ] || { echo 'FAIL: SKIP 开关时端口变了'; exit 1; }
-VERDICT=closed VERDICT2=open ARGS_LOG="$tmp/fb.args" FB_PORT=24443 no_probe_case "非 443 端口"
-[ "$(cat "$tmp/fb.stdout")" = "24443" ] || { echo 'FAIL: 非 443 端口时端口变了'; exit 1; }
-VERDICT=closed VERDICT2=open ARGS_LOG="$tmp/fb.args" REALITY_HOST=10.0.0.1 no_probe_case "内网地址"
+VERDICT=closed VERDICT2=open ARGS_LOG="$tmp/fb.args" no_probe_case "模式不在 443 上" 1
+[ "$(cat "$tmp/fb.stdout")" = "24431" ] || { echo 'FAIL: 模式不在 443 上时端口变了'; exit 1; }
+VERDICT=closed VERDICT2=open ARGS_LOG="$tmp/fb.args" REALITY_HOST=10.0.0.1 no_probe_case "内网地址" 3
 [ "$(cat "$tmp/fb.stdout")" = "443" ] || { echo 'FAIL: 内网地址时端口变了'; exit 1; }
 printf '%s\n' '不探活场景测试通过'
 
 # ---- 6) IPv6 地址原样传给探活 (去方括号, 不丢地址) ----
-cp "$tmp/config-orig.json" "$tmp/xray-etc/config.json"
+cp "$tmp/config-two.json" "$tmp/xray-etc/config.json"
 rm -f "$tmp/fb.args"
 VERDICT=closed VERDICT2=open ARGS_LOG="$tmp/fb.args" REALITY_HOST='[2408:8656:f1f5:e222::c103]' bash -c '
   source "$1" "$2"; source "$3"
-  probe_fallback "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" "cHJpdl9leGFtcGxl" "0123456789abcdef" "443" "www.amazon.com" > "$4/fb.stdout" 2> "$4/fb.stderr"
+  probe_fallback 3 > "$4/fb.stdout" 2> "$4/fb.stderr"
 ' _ "$tmp/harness.sh" "$tmp" "$tmp/verdict-stub.sh" "$tmp" || { echo 'FAIL: IPv6 地址 fallback 退出了'; exit 1; }
 grep -Fq '2408:8656:f1f5:e222::c103' "$tmp/fb.args" || { echo 'FAIL: 探活没收到 IPv6 地址'; cat "$tmp/fb.args" 2>/dev/null; exit 1; }
 v6_port="$(cat "$tmp/fb.stdout")"
@@ -254,11 +268,20 @@ if [ -n "$asset" ]; then
     [ "$got" = "$want" ] || { echo 'FAIL: 真 Xray sha256 不符'; exit 1; }
   fi
   unzip -o -q "$tmp/realxray/xray.zip" -d "$tmp/realxray" || { echo 'FAIL: 真 Xray 解压失败'; exit 1; }
-  # 替身配置里的私钥是假值, 真 Xray 校验 Reality 密钥格式会拒; 换成真 x25519 私钥再验结构
+  # 替身配置里的私钥/Encryption 密钥是假值, 真 Xray 校验格式会拒;
+  # 换成真 x25519 私钥与真 vlessenc decryption 再验结构 (所有 Reality 入站都要换)
   real_priv="$("$tmp/realxray/xray" x25519 2>/dev/null | grep -i 'private' | head -1 | sed -E 's/.*:[[:space:]]*//;s/[[:space:]]//g')"
   [ -n "$real_priv" ] || { echo 'FAIL: 真 Xray 生成密钥失败'; exit 1; }
-  jq --arg k "$real_priv" '.inbounds[0].streamSettings.realitySettings.privateKey = $k' "$tmp/config-fallback.json" > "$tmp/config-fallback-real.json"
-  jq --arg k "$real_priv" '.inbounds[0].streamSettings.realitySettings.privateKey = $k' "$tmp/xray-etc/config.json" > "$tmp/config-install-real.json"
+  real_dec="$("$tmp/realxray/xray" vlessenc 2>/dev/null | grep -m1 'decryption' | sed -E 's/.*"decryption": "([^"]+)".*/\1/')"
+  [ -n "$real_dec" ] || { echo 'FAIL: 真 Xray 生成 vlessenc 密钥失败'; exit 1; }
+  fix_keys() { # $1=输入 $2=输出 : 所有入站的 Reality 私钥与非 none 的 decryption 都换真值
+    jq --arg k "$real_priv" --arg d "$real_dec" \
+      '.inbounds |= map(if .streamSettings.realitySettings then .streamSettings.realitySettings.privateKey = $k else . end
+        | if (.settings.decryption // "none") != "none" then .settings.decryption = $d else . end)' \
+      "$1" > "$2"
+  }
+  fix_keys "$tmp/config-fallback.json" "$tmp/config-fallback-real.json"
+  fix_keys "$tmp/xray-etc/config.json" "$tmp/config-install-real.json"
   out="$("$tmp/realxray/xray" -test -config "$tmp/config-fallback-real.json" 2>&1)" || { echo "FAIL: 真 Xray 校验 fallback 配置不通过: $out"; exit 1; }
   out="$("$tmp/realxray/xray" -test -config "$tmp/config-install-real.json" 2>&1)" || { echo "FAIL: 真 Xray 校验安装后配置不通过: $out"; exit 1; }
   printf '%s\n' '真 Xray 配置校验通过'
