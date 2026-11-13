@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Xray VLESS 多模式一键脚本 — 模式 1 主攻 Quantumult X (QuanX) 与 Surge, 模式 2/3 只出 vless 链接
+# Xray VLESS 多模式一键脚本 — 模式 1 主攻 Quantumult X (QuanX) 与 Surge, 模式 2/3 出 Surge 行 + vless 链接 (QuanX 不支持)
 #
 # 用法:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/<repo>/main/reality)
@@ -9,7 +9,7 @@
 #   二次运行: bash reality 进菜单, 7 个选项: 1 查看客户端配置 2 扫描域名重装
 #   3 换端口 4 安装/添加节点 5 完全卸载 6 查看实时日志 7 重启;
 #   安装完自动输出各模式的客户端配置: 模式 1 有 Surge 行 + QuanX 行 + vless:// 链接,
-#   模式 2/3 只有 vless:// 链接 (Surge 需 Beta 版导入, QuanX 不支持), 另加二维码
+#   模式 2/3 有 Surge 行 + vless:// 链接 (QuanX 不支持), 另加二维码
 #   (终端打印 + PNG 文件)。
 #
 # 兼容: Debian 11/12/13, Ubuntu 20.04/22.04/24.04, Alpine Linux (OpenRC)
@@ -18,9 +18,9 @@
 #   模式 1 Reality 原版: VLESS / TCP + REALITY + xtls-rprx-vision, 默认高端口
 #     (10000-30000 随机未占用、非 CF 端口); QuanX 与 Surge 正式版都能用
 #   模式 2 VLESS Encryption: VLESS / TCP + VLESS Encryption (mlkem768x25519plus),
-#     不叠 REALITY/TLS, 默认高端口; 链接导入, Surge 需 Beta 版 (正式版/QuanX 不支持)
+#     不叠 REALITY/TLS, 默认高端口; Surge 行 + 链接导入 (QuanX 不支持)
 #   模式 3 推荐组合: VLESS / TCP + REALITY + Vision + VLESS Encryption, 默认 443
-#     (被占/被堵自动换高端口); 链接导入, Surge 需 Beta 版 (正式版/QuanX 不支持)
+#     (被占/被堵自动换高端口); Surge 行 + 链接导入 (QuanX 不支持)
 #   伪装域名默认 www.amazon.com:443
 #   (实测: Xray 26.10.31 对 www.apple.com / www.microsoft.com 会警告
 #    “会增加服务器 IP 被 GFW 封的概率”, www.amazon.com 则不警告, 故默认用它;
@@ -41,9 +41,10 @@
 #     flow=xtls-rprx-vision, sni=<SNI>, reality-public-key=<公钥>,
 #     reality-short-id=<shortId>; REALITY 下不用再加 tls=true, UDP relay 默认启用
 #   - 低版本 Surge 没有 VLESS, 贴过去不识别, 请先升级客户端再用 Surge 行
-#   - VLESS Encryption (模式 2/3) 只有 Surge Beta 支持, 正式版手册明确写着
-#     不支持 (encryption 只接受 none); 模式 2/3 只出 vless 链接
-#     (encryption=<串> 参数), Surge Beta 用分享链接导入, 不拼 Surge 配置行
+#   - VLESS Encryption (模式 2/3) Surge 也支持 (官方 VLESS 文档, encryption=<串>
+#     参数, 值就是 xray vlessenc 输出的客户端串); 模式 2 的 Surge 行不带 flow
+#     (服务端没开 Vision) 也不带 sni/Reality 参数, 模式 3 带 flow + Reality 参数
+#     + encryption, 顺序与模式 1 一致、encryption 放最后
 #
 # 防 CF / 防偷流量 (用户明确要求, 2026-11-06):
 #   - 端口: 默认 443 保留 (Reality 必须冒充 443 上的真站, 且直连 VPS IP、
@@ -720,7 +721,7 @@ parse_modes() { # $1=输入 (如 "1,3" / "1 2" / "all") ; stdout 输出升序去
 prompt_modes() { # 交互选模式: 回车=全部, 可多选如 1,3 ; 提示走 stderr, 结果走 stdout
   local ans="" tries=0 parsed=""
   while [ "$tries" -lt 3 ]; do
-    printf '%s\n' "节点模式: 1) Reality 原版 (QuanX/Surge)  2) VLESS Encryption (链接导入)  3) 推荐组合 Reality+Encryption (链接导入)" >&2
+    printf '%s\n' "节点模式: 1) Reality 原版 (QuanX/Surge)  2) VLESS Encryption (Surge/链接)  3) 推荐组合 Reality+Encryption (Surge/链接)" >&2
     printf '选择模式 (回车=全部, 可多选如 1,3): ' >&2
     read -r ans || ans=""
     ans="$(printf '%s' "$ans" | tr -d '\t\r\n')"
@@ -1180,11 +1181,14 @@ mode_client_config() { # $1=模式 $2=host $3=加括号的host $4=地区码前�
       MODE_LINK="vless://${MODE_UUID}@${bhost}:${MODE_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${MODE_SNI}&fp=chrome&pbk=${MODE_PUB}&sid=${MODE_SHORTID}&type=tcp&headerType=none#${link_name}"
       ;;
     2)
-      # 模式 2/3 只出 vless:// 链接: Surge 正式版与 QuanX 都不支持 VLESS Encryption,
-      # Surge Beta 用链接导入, 不拼未经验证的 Surge 配置行 (用户要求: 不支持就算了)
+      # Surge 行: encryption=<vlessenc 客户端串>, 不带 flow (服务端模式 2 没开 Vision),
+      # 不带 sni/Reality 参数 (无 TLS/Reality); 官方文档 Proxy-Enc 示例同款写法
+      MODE_SURGE="${surge_tag} = vless, ${ubhost}, ${MODE_PORT}, username=${MODE_UUID}, encryption=${MODE_ENC}"
       MODE_LINK="vless://${MODE_UUID}@${bhost}:${MODE_PORT}?encryption=${MODE_ENC}&security=none&type=tcp#${link_name}"
       ;;
     3)
+      # Surge 行: Reality 参数 + flow + encryption, 顺序与模式 1 一致, encryption 放最后
+      MODE_SURGE="${surge_tag} = vless, ${ubhost}, ${MODE_PORT}, username=${MODE_UUID}, flow=xtls-rprx-vision, sni=${MODE_SNI}, reality-public-key=${MODE_PUB}, reality-short-id=${MODE_SHORTID}, encryption=${MODE_ENC}"
       MODE_LINK="vless://${MODE_UUID}@${bhost}:${MODE_PORT}?encryption=${MODE_ENC}&flow=xtls-rprx-vision&security=reality&sni=${MODE_SNI}&fp=chrome&pbk=${MODE_PUB}&sid=${MODE_SHORTID}&type=tcp&headerType=none#${link_name}"
       ;;
   esac
@@ -1194,8 +1198,8 @@ print_mode_block() { # $1=模式 $2=host $3=二维码说明 ; 纯打印, 不读�
   local mode="$1" host="$2" qr_note="$3"
   case "$mode" in
     1) printf '%s\n' "--- 模式 1: Reality 原版 (QuanX / Surge 正式版) ---" ;;
-    2) printf '%s\n' "--- 模式 2: VLESS Encryption (vless 链接导入) ---" ;;
-    3) printf '%s\n' "--- 模式 3: Reality + Vision + VLESS Encryption (vless 链接导入) ---" ;;
+    2) printf '%s\n' "--- 模式 2: VLESS Encryption (Surge / vless 链接) ---" ;;
+    3) printf '%s\n' "--- 模式 3: Reality + Vision + VLESS Encryption (Surge / vless 链接) ---" ;;
   esac
   if mode_has_reality "$mode"; then
     printf '%s\n' "地址: ${host}:${MODE_PORT}  SNI/dest: ${MODE_SNI}  指纹: chrome (服务端不填, 客户端用)"
@@ -1208,7 +1212,7 @@ print_mode_block() { # $1=模式 $2=host $3=二维码说明 ; 纯打印, 不读�
     printf '%s\n' "$MODE_QX"
     printf '%s\n' ""
   else
-    printf '%s\n' "Quantumult X / Surge 正式版: 不支持 VLESS Encryption; Surge Beta 可导入下面的 vless 链接"
+    printf '%s\n' "Quantumult X: 不支持 VLESS Encryption; Surge 行见下"
     printf '%s\n' ""
   fi
   if [ -n "$MODE_SURGE" ]; then
@@ -1277,7 +1281,7 @@ show_all() { # 输出全部已装模式的客户端配置 (文件 + 终端 + 二
     [ -f "$png" ] && info "二维码已保存到 $png"
   done
   case " $modes " in *" 1 "*) info "模式 1: QuanX 要求 1.5.5+；Surge 要求 iOS 6.0.0+ 或 Mac 6.12.0+" ;; esac
-  case " $modes " in *" 2 "*|*" 3 "*) info "模式 2/3: 只出 vless 链接, Surge 需 Beta 版导入, QuanX 不支持" ;; esac
+  case " $modes " in *" 2 "*|*" 3 "*) info "模式 2/3: Surge 行 + vless 链接, Surge 要求 iOS 6.0.0+ 或 Mac 6.12.0+, QuanX 不支持" ;; esac
   warn "私钥在 $CONFIG_FILE 里, 别把配置文件 / 客户端文件发到公开地方"
 }
 
@@ -1723,7 +1727,7 @@ case "${1:-}" in
   -h|--help|help)
     printf '%s\n' "用法: bash reality [install|show|rescan|change-port|reconfig|update|restart|status|probe|logs|remove-mode|uninstall [--purge]]"
     printf '%s\n' "无参数时: 有终端进菜单 (1 查看配置 / 2 扫描重装 / 3 换端口 / 4 安装添加节点 / 5 完全卸载 / 6 实时日志 / 7 重启), 无终端 (管道/重定向) 直接安装"
-    printf '%s\n' "模式: 1 Reality 原版 (QuanX/Surge) / 2 VLESS Encryption (链接导入) / 3 推荐组合 Reality+Encryption (链接导入); 安装时多选, 如 REALITY_MODES=1,3, 回车=全部"
+    printf '%s\n' "模式: 1 Reality 原版 (QuanX/Surge) / 2 VLESS Encryption (Surge/链接) / 3 推荐组合 Reality+Encryption (Surge/链接); 安装时多选, 如 REALITY_MODES=1,3, 回车=全部"
     printf '%s\n' "端口: 模式 3 默认 443, 模式 1/2 默认 10000-30000 高端口; REALITY_PORT 只改第一个模式的端口"
     printf '%s\n' "show: 输出各模式的客户端配置 (模式 1: Surge 行 + QuanX 行 + vless 链接; 模式 2/3: 只有 vless 链接) + 二维码"
     printf '%s\n' "probe: 只测不改, 从两个机房回连各模式的端口, 报告外面能不能连进来"

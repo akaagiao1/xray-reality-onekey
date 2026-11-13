@@ -392,10 +392,21 @@ p2="$(jq -r '.inbounds[] | select(.tag=="vless-enc") | .port' "$tmp/xray-etc/con
 jq -e '.inbounds[] | select(.tag=="vless-enc" or .tag=="vless-reality-enc") | .settings.decryption | startswith("mlkem768x25519plus.native.600s.")' "$tmp/xray-etc/config.json" >/dev/null || { echo "§11: 模式 2/3 缺 decryption"; exit 1; }
 [ "$(grep -c '^--- 模式 ' "$tmp/client.txt")" = "3" ] || { echo "§11: 客户端文件应有 3 个模式块"; exit 1; }
 [ "$(grep -c '^vless=203.0.113.1' "$tmp/client.txt")" = "1" ] || { echo "§11: 应只有 1 条 QuanX 行 (模式 1)"; exit 1; }
-[ "$(grep -c ' = vless, 203.0.113.1,' "$tmp/client.txt")" = "1" ] || { echo "§11: 应只有 1 条 Surge 行 (模式 1)"; exit 1; }
+[ "$(grep -c ' = vless, 203.0.113.1,' "$tmp/client.txt")" = "3" ] || { echo "§11: 应有 3 条 Surge 行 (每模式 1 条)"; exit 1; }
 [ "$(grep -c '^vless://' "$tmp/client.txt")" = "3" ] || { echo "§11: 应有 3 条 vless 链接"; exit 1; }
-[ "$(grep -c 'encryption=mlkem768x25519plus' "$tmp/client.txt")" = "2" ] || { echo "§11: 应有 2 条带 encryption 的链接 (模式 2/3)"; exit 1; }
-[ "$(grep -c '不支持 VLESS Encryption' "$tmp/client.txt")" = "2" ] || { echo "§11: 应有 2 处不支持提示 (模式 2/3)"; exit 1; }
+[ "$(grep -c 'encryption=mlkem768x25519plus' "$tmp/client.txt")" = "4" ] || { echo "§11: 应有 4 处 encryption=mlkem 串 (模式 2/3 各 1 行 Surge + 1 条链接)"; exit 1; }
+[ "$(grep -c '不支持 VLESS Encryption' "$tmp/client.txt")" = "2" ] || { echo "§11: 应有 2 处 QuanX 不支持提示 (模式 2/3)"; exit 1; }
+# Surge 行精确格式: 假 xray 的密钥固定 (公钥 43 个 B), UUID/shortId 从配置里读
+# (gen_uuid 优先读 /proc/sys/kernel/random/uuid, 不是假 xray 的固定值)
+b43="$(printf 'B%.0s' $(seq 1 43))"
+uuid2="$(jq -r '.inbounds[] | select(.tag=="vless-enc") | .settings.clients[0].id' "$tmp/xray-etc/config.json")"
+uuid3="$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .settings.clients[0].id' "$tmp/xray-etc/config.json")"
+enc_str="mlkem768x25519plus.native.0rtt.$b43"
+sid3="$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .streamSettings.realitySettings.shortIds[0]' "$tmp/xray-etc/config.json")"
+grep -qF "Surge-Enc = vless, 203.0.113.1, $p2, username=$uuid2, encryption=$enc_str" "$tmp/client.txt" || { echo "§11: 模式 2 Surge 行格式不对"; exit 1; }
+m2line="$(grep 'Surge-Enc = vless' "$tmp/client.txt")"
+case "$m2line" in *flow=*|*sni=*|*reality-*) echo "§11: 模式 2 Surge 行不应带 flow/sni/Reality 参数"; exit 1;; esac
+grep -qF "Surge-RealityEnc = vless, 203.0.113.1, 443, username=$uuid3, flow=xtls-rprx-vision, sni=www.amazon.com, reality-public-key=$b43, reality-short-id=$sid3, encryption=$enc_str" "$tmp/client.txt" || { echo "§11: 模式 3 Surge 行格式不对"; exit 1; }
 printf 'SECTION11-OK\n'
 
 printf 'ALL-MODES-TESTS-OK\n'

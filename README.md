@@ -5,10 +5,10 @@
 | 模式 | 协议 | 默认端口 | 客户端配置 |
 | --- | --- | --- | --- |
 | 1 Reality 原版 | VLESS / TCP + REALITY + xtls-rprx-vision | 高端口（10000–30000） | Surge 行 + QuanX 行 + vless:// 链接 + 二维码 |
-| 2 VLESS Encryption | VLESS / TCP + VLESS Encryption（mlkem768x25519plus） | 高端口（10000–30000） | 只有 vless:// 链接 + 二维码 |
-| 3 推荐组合 | VLESS / TCP + REALITY + Vision + VLESS Encryption | 443（被占/被堵自动换高端口） | 只有 vless:// 链接 + 二维码 |
+| 2 VLESS Encryption | VLESS / TCP + VLESS Encryption（mlkem768x25519plus） | 高端口（10000–30000） | Surge 行 + vless:// 链接 + 二维码 |
+| 3 推荐组合 | VLESS / TCP + REALITY + Vision + VLESS Encryption | 443（被占/被堵自动换高端口） | Surge 行 + vless:// 链接 + 二维码 |
 
-模式 2/3 的 VLESS Encryption 只有 Surge Beta（分享链接导入）与 Xray 内核客户端支持，Surge 正式版与 QuanX 不支持，所以展示节点时模式 2/3 只出 vless 链接，不拼 Surge / QuanX 行。
+模式 2/3 的 VLESS Encryption Surge 正式版支持（iOS 6.0.0+ / Mac 6.12.0+，`encryption` 参数，值就是 `xray vlessenc` 输出的客户端串），QuanX 不支持，所以模式 2/3 有 Surge 行、没有 QuanX 行。
 
 > ⚠️ 客户端配置保存在 `/root/xray-reality-client.txt`，内含连接凭据，请勿公开分享。二维码：模式 1 沿用 `/root/xray-reality-client.png`，模式 2/3 各有自己的 PNG（文件名带 `-vlessenc` / `-reality-vlessenc` 后缀）。
 
@@ -63,7 +63,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 
 | 菜单 | 作用 |
 | --- | --- |
-| 1. 查看客户端配置 | 各模式的客户端配置 + 二维码（模式 1 三样都有，模式 2/3 只有链接） |
+| 1. 查看客户端配置 | 各模式的客户端配置 + 二维码（模式 1 三样都有，模式 2/3 有 Surge 行 + 链接，没有 QuanX 行） |
 | 2. 重新安装并扫描 Reality 域名 | 按本机 /23 → 相邻上段 /23 → 相邻下段 /23 的优先级扫邻居域名，哪个先扫到合格域名就用哪个重装，只换 dest / SNI，UUID、密钥、端口不变；都扫不到改用 `www.apple.com` 安装；只装了模式 2 时没域名可扫 |
 | 3. 更换端口 | 只换一个模式的端口，域名、UUID、密钥、shortId 不变，其他模式不动；多模式时先选模式 |
 | 4. 安装/添加节点 | 多选：回车=全部，如 `1,3`；已装的模式保留凭据与端口，只补装没装的 |
@@ -111,10 +111,22 @@ vless=服务器IP:24443, method=none, password=<UUID>, obfs=over-tls, obfs-host=
 vless://<UUID>@<服务器IP>:24443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=<你的邻居域名>&fp=chrome&pbk=<公钥>&sid=<shortId>&type=tcp&headerType=none#LA-Reality
 ```
 
+**模式 2：Surge** — 复制整行到配置的 `[Proxy]` 段。不带 `flow`（服务端没开 Vision），不带 `sni` / Reality 参数：
+
+```ini
+LA-Surge-Enc = vless, 服务器IP, 24443, username=<UUID>, encryption=<mlkem768x25519plus串>
+```
+
 **模式 2：vless:// 链接**（无 Reality/TLS，加密靠 VLESS Encryption 本身）：
 
 ```text
 vless://<UUID>@<服务器IP>:24443?encryption=<mlkem768x25519plus串>&security=none&type=tcp#LA-Enc
+```
+
+**模式 3：Surge** — 复制整行到配置的 `[Proxy]` 段。Reality 参数 + `flow` + `encryption`：
+
+```ini
+LA-Surge-RealityEnc = vless, 服务器IP, 443, username=<UUID>, flow=xtls-rprx-vision, sni=<你的邻居域名>, reality-public-key=<公钥>, reality-short-id=<shortId>, encryption=<mlkem768x25519plus串>
 ```
 
 **模式 3：vless:// 链接**（Reality + Vision 再叠 VLESS Encryption）：
@@ -129,7 +141,7 @@ vless://<UUID>@<服务器IP>:443?encryption=<mlkem768x25519plus串>&flow=xtls-rp
 
 | 客户端 | 模式 1（洛杉矶为例） | 模式 2 | 模式 3 |
 | --- | --- | --- | --- |
-| Surge | `LA-Surge-Reality` | — | — |
+| Surge | `LA-Surge-Reality` | `LA-Surge-Enc` | `LA-Surge-RealityEnc` |
 | QuanX `tag=` | `LA-Quanx-Reality` | — | — |
 | vless:// `#` 后 | `LA-Reality` | `LA-Enc` | `LA-RealityEnc` |
 
@@ -184,7 +196,7 @@ REALITY_HOST=example.com bash reality install
 - **`--csv` 报“CSV 文件不存在”**：`--csv` 后面必须是已扫出来的 `file.csv`，先跑一遍扫描生成它。
 - **扫描 0 行 / 没有推荐域名**：这个网段没扫到东西，或扫到的没通过筛选。全自动安装和扫描重装会直接用 `www.apple.com` 装；想用邻居域名就换个网段再扫（如相邻 /24），或用已验证的域名手动装（`REALITY_SNI=域名`）。
 - **QuanX 显示节点但连不上**：确认 QuanX ≥ 1.5.5，确认粘贴的是脚本输出的 QuanX 行（不是只导了链接），`obfs-host` / `reality-base64-pubkey` / `reality-hex-shortid` / `vless-flow` 一个都不能少。QuanX 只支持模式 1，模式 2/3 没有 QuanX 行是正常的。
-- **Surge 导入模式 2/3 的链接没反应**：需要 Surge Beta，正式版不支持 VLESS Encryption；Beta 里用分享链接导入。
+- **Surge 贴了模式 2/3 的行不识别**：确认 Surge iOS 6.0.0+ / Mac 6.12.0+，VLESS Encryption 与 VLESS 同版本要求，低版本请先升级。
 - **Alpine 上服务起不来**：看 `rc-service xray status`，确认 `rc-update show` 里 `xray` 在 default 运行级。
 - **Alpine 上没有二维码**：二维码命令行在 `libqrencode-tools` 包里，不在 `qrencode` 里；脚本已改成装 `libqrencode-tools`，装好后跑 `bash reality show` 可补生成。
 - **Alpine 上扫描报错**：扫描器和检测器是 glibc 链接的，Alpine（musl）上要装 `gcompat` 才能跑，脚本会自动装；手动装：`apk update && apk add python3 gcompat`（`apk add` 没有 `-y` 参数）。
