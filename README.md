@@ -32,7 +32,7 @@ apk update && apk add --no-cache bash curl python3 gcompat
 
 不要直接用默认域名装。先扫 VPS 所在网段，挑一个冷门邻居域名做 dest / SNI。
 
-全自动，扫描 → 筛选 → 直接装好（推荐，默认只装模式 1）：
+全自动，扫描 → 筛选 → 直接装好（推荐）：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/auto-reality.sh)
@@ -44,14 +44,16 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 REALITY_MODES=1,2,3 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/auto-reality.sh)
 ```
 
-手动两步，先扫、挑一个、再装：
+一键命令会自动把扫描推荐的域名传给模式 1 和模式 3；模式 2 不使用 Reality 域名。有终端时回车选择全部模式，无终端时默认只装模式 1，也可通过 `REALITY_MODES` 指定。扫不到合格域名时会说明并使用 `www.apple.com`。
+
+检测到已有 Xray 时，交互模式会询问是否完全卸载重装：输入 `yes` 才会删除旧程序、服务、配置及客户端文件，旧节点会失效；取消或非交互运行时停止。其他位置安装的 Xray 若未能彻底卸除，脚本会停止并提示手动检查。扫描只针对有权扫描的网段，VPS 上扫描可能被标记。
+
+如需手动挑选，先运行扫描，再把第二条命令中的域名替换成实际选中的域名，不要原样复制占位文字：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/scan-neighbors.sh)
-REALITY_SNI=挑到的域名 bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality) install
+REALITY_SNI=example.com bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality) install
 ```
-
-有终端时安装会问节点模式：回车装全部，可多选如 `1,3`；无终端（管道）时默认只装模式 1，用 `REALITY_MODES` 指定。扫不到合格域名时不硬停，改用 `www.apple.com` 直接装，并在输出里明说；机器上已有 Xray 时也会停下，以免覆盖现有节点。扫描只针对有权扫描的网段，VPS 上扫描可能被标记。
 
 ## 菜单与命令行
 
@@ -192,7 +194,7 @@ REALITY_HOST=example.com bash reality install
 
 ## 常见问题
 
-- **报“检测到现有 Xray”**：机器上已有节点，怕覆盖直接停了。确认不要旧节点后先卸载再装：`bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality) uninstall --purge`（一键命令是管道执行，`reality` 没落盘，卸载也要用 curl 写法）。
+- **报“检测到现有 Xray”**：交互运行一键命令并输入 `yes` 可完全卸载重装；非交互运行会停止。也可确认不要旧节点后手动卸载：`bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/main/reality) uninstall --purge`（一键命令是管道执行，`reality` 没落盘，卸载也要用 curl 写法）。
 - **`--csv` 报“CSV 文件不存在”**：`--csv` 后面必须是已扫出来的 `file.csv`，先跑一遍扫描生成它。
 - **扫描 0 行 / 没有推荐域名**：这个网段没扫到东西，或扫到的没通过筛选。全自动安装和扫描重装会直接用 `www.apple.com` 装；想用邻居域名就换个网段再扫（如相邻 /24），或用已验证的域名手动装（`REALITY_SNI=域名`）。
 - **QuanX 显示节点但连不上**：确认 QuanX ≥ 1.5.5，确认粘贴的是脚本输出的 QuanX 行（不是只导了链接），`obfs-host` / `reality-base64-pubkey` / `reality-hex-shortid` / `vless-flow` 一个都不能少。QuanX 只支持模式 1，模式 2/3 没有 QuanX 行是正常的。

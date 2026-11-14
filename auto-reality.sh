@@ -5,7 +5,7 @@ error() { printf '[错误] %s\n' "$*" >&2; exit 1; }
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
   printf '%s\n' '用法: bash auto-reality.sh [--csv 已有扫描结果.csv]' \
     '默认按本机 /23 → 相邻上段 /23 → 相邻下段 /23 的优先级扫描；--csv 使用已有扫描结果。' \
-    '扫不到合格候选时改用 www.apple.com 安装；已有 Xray 配置时停止，不覆盖。'
+    '扫不到合格候选时改用 www.apple.com 安装；已有 Xray 时询问是否完全卸载重装。'
   exit 0
 fi
 csv=''
@@ -20,7 +20,6 @@ command -v curl >/dev/null 2>&1 || error '需要 curl；请先安装 curl 和 ca
 existing_xray() {
   [[ -e /usr/local/etc/xray/config.json || -e /usr/local/bin/xray || -e /etc/systemd/system/xray.service || -e /usr/lib/systemd/system/xray.service || -e /lib/systemd/system/xray.service || -e /etc/init.d/xray ]] || command -v xray >/dev/null 2>&1
 }
-existing_xray && error '检测到现有 Xray 程序、配置或服务，已停止以免覆盖现有节点。'
 if ! command -v python3 >/dev/null 2>&1; then
   if [ -f /etc/os-release ]; then
     # shellcheck disable=SC1091
@@ -44,6 +43,21 @@ fi
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/auto-reality.XXXXXXXX") || error '无法创建临时目录。'
 trap 'rm -rf -- "$workdir"' EXIT
 base='https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/4cfef1e8b32be09b83bf5926c9b11604e6e245f6'
+ensure_clean_install() {
+  existing_xray || return 0
+  [[ -t 0 ]] || error '检测到现有 Xray；非交互模式无法确认完全卸载，已停止。'
+  printf '检测到现有 Xray。完全卸载会删除程序、服务、配置和客户端文件，旧节点将失效。输入 yes 确认卸载重装，其他输入取消: '
+  local answer
+  read -r answer || error '未确认卸载，已停止。'
+  [[ $answer == yes ]] || error '已取消，现有 Xray 未改动。'
+  if [[ ! -f $workdir/reality ]]; then
+    curl -fsSL --retry 3 --connect-timeout 15 -o "$workdir/reality" "$base/reality" || error '安装脚本下载失败，未卸载现有 Xray。'
+  fi
+  bash "$workdir/reality" uninstall --purge || error '卸载失败，已停止安装。'
+  existing_xray && error '卸载后仍检测到 Xray，请检查其他安装或服务，已停止安装。'
+  return 0
+}
+ensure_clean_install
 printf '[1/3] 下载扫描脚本...\n'
 curl -fsSL --retry 3 --connect-timeout 15 -o "$workdir/scan-neighbors.sh" "$base/scan-neighbors.sh" || error '扫描脚本下载失败。'
 public_ip() {
@@ -104,8 +118,8 @@ else
     printf '没有扫到符合条件的推荐域名，改用默认域名 www.apple.com 安装。\n'
   fi
 fi
-existing_xray && error '检测到现有 Xray 程序、配置或服务，已停止以免覆盖现有节点。'
+ensure_clean_install
 printf '[3/3] 采用域名 %s，开始安装 REALITY...\n' "$selected"
-curl -fsSL --retry 3 --connect-timeout 15 -o "$workdir/reality" "$base/reality" || error '安装脚本下载失败。'
+[[ -f $workdir/reality ]] || curl -fsSL --retry 3 --connect-timeout 15 -o "$workdir/reality" "$base/reality" || error '安装脚本下载失败。'
 REALITY_SNI="$selected" bash "$workdir/reality" install || error 'REALITY 安装失败，请检查上面的错误。'
 printf '安装完成，域名：%s\n' "$selected"
