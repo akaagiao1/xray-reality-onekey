@@ -137,16 +137,17 @@ bash -c '
   ensure_config
   U1="$(gen_uuid)"; U2="$(gen_uuid)"; U3="$(gen_uuid)"
   KP1="$(gen_keypair)"; PRIV1="$(printf "%s" "$KP1" | sed -n "1p")"; PUB1="$(printf "%s" "$KP1" | sed -n "2p")"
+  KP2="$(gen_keypair)"; PRIV2="$(printf "%s" "$KP2" | sed -n "1p")"; PUB2="$(printf "%s" "$KP2" | sed -n "2p")"; SID2="$(openssl rand -hex 8)"
   KP3="$(gen_keypair)"; PRIV3="$(printf "%s" "$KP3" | sed -n "1p")"; PUB3="$(printf "%s" "$KP3" | sed -n "2p")"
   SID1="$(openssl rand -hex 8)"; SID3="$(openssl rand -hex 8)"
   VP2="$(gen_vlessenc)"; DEC2="$(printf "%s" "$VP2" | sed -n "1p")"; ENC2="$(printf "%s" "$VP2" | sed -n "2p")"
   VP3="$(gen_vlessenc)"; DEC3="$(printf "%s" "$VP3" | sed -n "1p")"; ENC3="$(printf "%s" "$VP3" | sed -n "2p")"
   upsert_inbound 1 "$(inbound_json 1 "$U1" 24431 "example.com" "$PRIV1" "$SID1" "none")"
-  upsert_inbound 2 "$(inbound_json 2 "$U2" 24432 "" "" "" "$DEC2")"
+  upsert_inbound 2 "$(inbound_json 2 "$U2" 24432 "example.com" "$PRIV2" "$SID2" "$DEC2")"
   upsert_inbound 3 "$(inbound_json 3 "$U3" 24433 "example.com" "$PRIV3" "$SID3" "$DEC3")"
   validate_config
-  jq -n --arg u1 "$U1" --arg p1 "$PUB1" --arg s1 "$SID1" --arg u2 "$U2" --arg e2 "$ENC2" --arg u3 "$U3" --arg p3 "$PUB3" --arg s3 "$SID3" --arg e3 "$ENC3" \
-    "{uuid1:\$u1, pub1:\$p1, sid1:\$s1, uuid2:\$u2, enc2:\$e2, uuid3:\$u3, pub3:\$p3, sid3:\$s3, enc3:\$e3}" > "$2/e2e/creds.json"
+  jq -n --arg u1 "$U1" --arg p1 "$PUB1" --arg s1 "$SID1" --arg u2 "$U2" --arg p2 "$PUB2" --arg s2 "$SID2" --arg e2 "$ENC2" --arg u3 "$U3" --arg p3 "$PUB3" --arg s3 "$SID3" --arg e3 "$ENC3" \
+    "{uuid1:\$u1, pub1:\$p1, sid1:\$s1, uuid2:\$u2, pub2:\$p2, sid2:\$s2, enc2:\$e2, uuid3:\$u3, pub3:\$p3, sid3:\$s3, enc3:\$e3}" > "$2/e2e/creds.json"
   printf "SECTION3-OK\n"
 ' _ "$tmp/harness.sh" "$tmp" "$REALXRAY"
 [ "$(jq -r '.inbounds | length' "$tmp/e2e/server.json")" = "3" ] || { echo "§3: 入站数不是 3"; exit 1; }
@@ -163,7 +164,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   printf 'SECTION4 SKIP: 没有 python3\n'
 else
 U1="$(jq -r .uuid1 "$tmp/e2e/creds.json")"; P1="$(jq -r .pub1 "$tmp/e2e/creds.json")"; S1="$(jq -r .sid1 "$tmp/e2e/creds.json")"
-U2="$(jq -r .uuid2 "$tmp/e2e/creds.json")"; E2="$(jq -r .enc2 "$tmp/e2e/creds.json")"
+U2="$(jq -r .uuid2 "$tmp/e2e/creds.json")"; P2="$(jq -r .pub2 "$tmp/e2e/creds.json")"; S2="$(jq -r .sid2 "$tmp/e2e/creds.json")"; E2="$(jq -r .enc2 "$tmp/e2e/creds.json")"
 U3="$(jq -r .uuid3 "$tmp/e2e/creds.json")"; P3="$(jq -r .pub3 "$tmp/e2e/creds.json")"; S3="$(jq -r .sid3 "$tmp/e2e/creds.json")"; E3="$(jq -r .enc3 "$tmp/e2e/creds.json")"
 mkclient() { # $1=名 $2=socks口 $3=服务端 $4=uuid $5=reality|none $6=公钥 $7=sid $8=flow $9=encryption(空=none)
   jq -n --argjson sport "$2" --argjson dport "$3" --arg uuid "$4" --arg sec "$5" \
@@ -179,8 +180,9 @@ mkclient() { # $1=名 $2=socks口 $3=服务端 $4=uuid $5=reality|none $6=公钥
           + {encryption: (if $enc != "" then $enc else "none" end)}
         )]}]},
         streamSettings: (
-          if $sec == "reality" then
-            {network: "tcp", security: "reality", realitySettings: {serverName: "example.com", fingerprint: "chrome", publicKey: $pub, shortId: $sid, show: true}}
+          if $sec == "reality" or $sec == "xhttp" then
+            {network: (if $sec == "xhttp" then "xhttp" else "tcp" end), security: "reality", realitySettings: {serverName: "example.com", fingerprint: "chrome", publicKey: $pub, shortId: $sid, show: true}}
+            + (if $sec == "xhttp" then {xhttpSettings:{path:"/",mode:"auto"}} else {} end)
           else
             {network: "tcp", security: "none"}
           end
@@ -190,10 +192,10 @@ mkclient() { # $1=名 $2=socks口 $3=服务端 $4=uuid $5=reality|none $6=公钥
   "$REALXRAY" -test -config "$tmp/e2e/client-$1.json" >/dev/null 2>&1 || { echo "§4: 客户端 $1 配置 -test 失败"; exit 1; }
 }
 mkclient 1 11081 24431 "$U1" reality "$P1" "$S1" "xtls-rprx-vision" ""
-mkclient 2 11082 24432 "$U2" none "" "" "" "$E2"
+mkclient 2 11082 24432 "$U2" xhttp "$P2" "$S2" "" "$E2"
 mkclient 3 11083 24433 "$U3" reality "$P3" "$S3" "xtls-rprx-vision" "$E3"
 mkclient 3noenc 11084 24433 "$U3" reality "$P3" "$S3" "xtls-rprx-vision" ""
-mkclient 2wrong 11085 24432 "$U2" none "" "" "" "$E3"
+mkclient 2wrong 11085 24432 "$U2" xhttp "$P2" "$S2" "" "$E3"
 # 服务端补丁 (仅测试用): access 日志 + finalRules 放行回环 + Reality 入站开 show
 jq --arg p "$tmp/e2e/access.log" \
   '.log.access = $p | .log.loglevel = "debug"
@@ -254,7 +256,7 @@ bash -c '
   assert_eq() { [ "$1" = "$2" ] || { printf "ASSERT FAIL: got [%s] want [%s]\n" "$1" "$2"; exit 1; }; }
   priv="$(printf "A%.0s" $(seq 1 43))"
   dec="mlkem768x25519plus.native.600s.$priv"
-  upsert_inbound 2 "$(inbound_json 2 "22222222-2222-3333-4444-555555555555" 24432 "" "" "" "$dec")"
+  upsert_inbound 2 "$(inbound_json 2 "22222222-2222-3333-4444-555555555555" 24432 "example.com" "$priv" "0123456789abcdef" "$dec")"
   assert_eq "$(jq -r ".inbounds | length" "$CONFIG_FILE")" "3"
   assert_eq "$(jq -r ".inbounds[] | select(.tag==\"handmade\") | .port" "$CONFIG_FILE")" "9999"
   assert_eq "$(jq -r ".inbounds[] | select(.tag==\"vless-enc\") | .port" "$CONFIG_FILE")" "24432"
@@ -403,9 +405,9 @@ uuid2="$(jq -r '.inbounds[] | select(.tag=="vless-enc") | .settings.clients[0].i
 uuid3="$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .settings.clients[0].id' "$tmp/xray-etc/config.json")"
 enc_str="mlkem768x25519plus.native.0rtt.$b43"
 sid3="$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .streamSettings.realitySettings.shortIds[0]' "$tmp/xray-etc/config.json")"
-grep -qF "Surge-Enc = vless, 203.0.113.1, $p2, username=$uuid2, encryption=$enc_str" "$tmp/client.txt" || { echo "§11: 模式 2 Surge 行格式不对"; exit 1; }
+grep -qF "Surge-Enc = vless, 203.0.113.1, $p2, username=$uuid2, xhttp=true, xhttp-path=/, sni=www.amazon.com, reality-public-key=$b43" "$tmp/client.txt" || { echo "§11: 模式 2 Surge 行格式不对"; exit 1; }
 m2line="$(grep 'Surge-Enc = vless' "$tmp/client.txt")"
-case "$m2line" in *flow=*|*sni=*|*reality-*) echo "§11: 模式 2 Surge 行不应带 flow/sni/Reality 参数"; exit 1;; esac
+case "$m2line" in *flow=*) echo "§11: 模式 2 不应带 flow"; exit 1;; *reality-short-id=*encryption=*) ;; *) echo "§11: 模式 2 缺 Reality 或加密参数"; exit 1;; esac
 grep -qF "Surge-RealityEnc = vless, 203.0.113.1, 443, username=$uuid3, flow=xtls-rprx-vision, sni=www.amazon.com, reality-public-key=$b43, reality-short-id=$sid3, encryption=$enc_str" "$tmp/client.txt" || { echo "§11: 模式 3 Surge 行格式不对"; exit 1; }
 printf 'SECTION11-OK\n'
 

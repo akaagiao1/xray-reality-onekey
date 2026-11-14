@@ -17,8 +17,8 @@
 # 三种模式 (一个配置多个入站, 各用各的端口与凭据, 可单装可多选):
 #   模式 1 Reality 原版: VLESS / TCP + REALITY + xtls-rprx-vision, 默认高端口
 #     (10000-30000 随机未占用、非 CF 端口); QuanX 与 Surge 正式版都能用
-#   模式 2 VLESS Encryption: VLESS / TCP + VLESS Encryption (mlkem768x25519plus),
-#     不叠 REALITY/TLS, 默认高端口; Surge 行 + 链接导入 (QuanX 不支持)
+#   模式 2: VLESS / XHTTP + REALITY + VLESS Encryption (mlkem768x25519plus),
+#     默认高端口; Surge 行 + 链接导入 (QuanX 不支持)
 #   模式 3 推荐组合: VLESS / TCP + REALITY + Vision + VLESS Encryption, 默认 443
 #     (被占/被堵自动换高端口); Surge 行 + 链接导入 (QuanX 不支持)
 #   伪装域名默认 www.amazon.com:443
@@ -43,7 +43,7 @@
 #   - 低版本 Surge 没有 VLESS, 贴过去不识别, 请先升级客户端再用 Surge 行
 #   - VLESS Encryption (模式 2/3) Surge 也支持 (官方 VLESS 文档, encryption=<串>
 #     参数, 值就是 xray vlessenc 输出的客户端串); 模式 2 的 Surge 行不带 flow
-#     (服务端没开 Vision) 也不带 sni/Reality 参数, 模式 3 带 flow + Reality 参数
+#     (服务端没开 Vision), 并带 XHTTP / Reality 参数, 模式 3 带 flow + Reality 参数
 #     + encryption, 顺序与模式 1 一致、encryption 放最后
 #
 # 防 CF / 防偷流量 (用户明确要求, 2026-11-06):
@@ -108,7 +108,7 @@
 #   多模式时再加 REALITY_MODE=1/2/3 指定换哪一个。
 # 扫描邻居域名并重装用 bash reality rescan (菜单 2): 按本机 /23 → 相邻上段 /23 →
 # 相邻下段 /23 的优先级扫, 哪个先扫到合格域名就用哪个做新 dest/SNI, UUID/密钥/端口不变;
-# 都扫不到改用 www.apple.com 安装; 只换 Reality 模式 (1/3) 的域名, 只装了模式 2 时没域名可扫。
+# 都扫不到改用 www.apple.com 安装; 只换 Reality 模式的域名。
 #
 set -u
 export LC_ALL=C
@@ -559,7 +559,7 @@ json_get() { # $1=file $2=jq表达式
 }
 
 # ---- 多模式配置层: 一个配置多个入站, 按 tag 区分模式 -------------------
-# 模式 1 Reality 原版 / 模式 2 VLESS Encryption / 模式 3 推荐组合;
+# 模式 1 Reality 原版 / 模式 2 XHTTP + Reality + PQ / 模式 3 推荐组合;
 # 旧版单入站配置没有 tag, 读的时候把没 tag 的 vless 入站当成模式 1,
 # 写的时候顺手给它打上 tag, 老节点不用重装。
 mode_tag() { # $1=模式 ; 输出该模式入站的 tag
@@ -572,7 +572,7 @@ mode_tag() { # $1=模式 ; 输出该模式入站的 tag
 }
 
 mode_has_reality() { # $1=模式 ; Reality 模式返回 0
-  case "$1" in 1|3) return 0 ;; *) return 1 ;; esac
+  case "$1" in 1|2|3) return 0 ;; *) return 1 ;; esac
 }
 
 mode_has_enc() { # $1=模式 ; 带 VLESS Encryption 的模式返回 0
@@ -721,7 +721,7 @@ parse_modes() { # $1=输入 (如 "1,3" / "1 2" / "all") ; stdout 输出升序去
 prompt_modes() { # 交互选模式: 回车=全部, 可多选如 1,3 ; 提示走 stderr, 结果走 stdout
   local ans="" tries=0 parsed=""
   while [ "$tries" -lt 3 ]; do
-    printf '%s\n' "节点模式: 1) Reality 原版 (QuanX/Surge)  2) VLESS Encryption (Surge/链接)  3) 推荐组合 Reality+Encryption (Surge/链接)" >&2
+    printf '%s\n' "节点模式: 1) Reality 原版 (QuanX/Surge)  2) XHTTP + Reality + PQ (Surge/链接)  3) 推荐组合 Reality+Encryption (Surge/链接)" >&2
     printf '选择模式 (回车=全部, 可多选如 1,3): ' >&2
     read -r ans || ans=""
     ans="$(printf '%s' "$ans" | tr -d '\t\r\n')"
@@ -991,9 +991,11 @@ inbound_json() { # $1=模式 $2=uuid $3=port $4=sni $5=priv $6=shortid $7=decryp
       ;;
     2)
       jq -n --arg tag "$(mode_tag 2)" --arg uuid "$uuid" --argjson port "$port" --arg dec "$dec" \
+        --arg sni "$sni" --arg priv "$priv" --arg sid "$shortid" \
         '{tag:$tag, port:$port, protocol:"vless",
           settings:{clients:[{id:$uuid}], decryption:$dec},
-          streamSettings:{network:"tcp", security:"none"}}'
+          streamSettings:{network:"xhttp", security:"reality", xhttpSettings:{path:"/", mode:"auto"},
+            realitySettings:{show:false, target:($sni+":443"), xver:0, serverNames:[$sni], privateKey:$priv, shortIds:[$sid]}}}'
       ;;
     3)
       jq -n --arg tag "$(mode_tag 3)" --arg uuid "$uuid" --argjson port "$port" \
@@ -1068,10 +1070,11 @@ do_install() {
   local has_reality=0 m
   for m in $modes; do mode_has_reality "$m" && has_reality=1; done
 
-  # SNI: 只有 Reality 模式才需要; 只装模式 2 时不问不校验
+  # 所有模式都使用 Reality SNI
   local sni=""
   if [ "$has_reality" = "1" ]; then
     sni="${REALITY_SNI:-$(inbound_value 1 sni)}"
+    [ -n "$sni" ] || sni="$(inbound_value 2 sni)"
     [ -n "$sni" ] || sni="$(inbound_value 3 sni)"
     [ -n "$sni" ] || sni="$DEFAULT_SNI"
     if [ -t 0 ] && [ -z "${REALITY_SNI:-}" ]; then
@@ -1150,7 +1153,9 @@ mode_client_config() { # $1=模式 $2=host $3=加括号的host $4=地区码前�
   MODE_SHORTID="$(inbound_value "$mode" shortid)"
   MODE_PUB=""; MODE_ENC=""; MODE_SURGE=""; MODE_QX=""; MODE_LINK=""
   [ -n "$MODE_UUID" ] && [ -n "$MODE_PORT" ] || die "模式 $mode 配置不完整, 请重装"
-  if mode_has_reality "$mode"; then
+  local legacy_mode2=0
+  if [ "$mode" = "2" ] && [ -z "$(inbound_value 2 priv)" ]; then legacy_mode2=1; fi
+  if mode_has_reality "$mode" && [ "$legacy_mode2" = "0" ]; then
     local priv; priv="$(inbound_value "$mode" priv)"
     MODE_PUB="$("$XRAY_BIN" x25519 -i "$priv" 2>/dev/null | extract_xray_public)"
     [ -n "$MODE_PUB" ] || die "模式 $mode 私钥无法反推公钥, 请检查配置"
@@ -1181,10 +1186,13 @@ mode_client_config() { # $1=模式 $2=host $3=加括号的host $4=地区码前�
       MODE_LINK="vless://${MODE_UUID}@${bhost}:${MODE_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${MODE_SNI}&fp=chrome&pbk=${MODE_PUB}&sid=${MODE_SHORTID}&type=tcp&headerType=none#${link_name}"
       ;;
     2)
-      # Surge 行: encryption=<vlessenc 客户端串>, 不带 flow (服务端模式 2 没开 Vision),
-      # 不带 sni/Reality 参数 (无 TLS/Reality); 官方文档 Proxy-Enc 示例同款写法
-      MODE_SURGE="${surge_tag} = vless, ${ubhost}, ${MODE_PORT}, username=${MODE_UUID}, encryption=${MODE_ENC}"
-      MODE_LINK="vless://${MODE_UUID}@${bhost}:${MODE_PORT}?encryption=${MODE_ENC}&security=none&type=tcp#${link_name}"
+      if [ "$legacy_mode2" = "1" ]; then
+        MODE_SURGE="${surge_tag} = vless, ${ubhost}, ${MODE_PORT}, username=${MODE_UUID}, encryption=${MODE_ENC}"
+        MODE_LINK="vless://${MODE_UUID}@${bhost}:${MODE_PORT}?encryption=${MODE_ENC}&security=none&type=tcp#${link_name}"
+      else
+        MODE_SURGE="${surge_tag} = vless, ${ubhost}, ${MODE_PORT}, username=${MODE_UUID}, xhttp=true, xhttp-path=/, sni=${MODE_SNI}, reality-public-key=${MODE_PUB}, reality-short-id=${MODE_SHORTID}, encryption=${MODE_ENC}"
+        MODE_LINK="vless://${MODE_UUID}@${bhost}:${MODE_PORT}?encryption=${MODE_ENC}&security=reality&sni=${MODE_SNI}&fp=chrome&pbk=${MODE_PUB}&sid=${MODE_SHORTID}&type=xhttp&path=%2F&mode=auto#${link_name}"
+      fi
       ;;
     3)
       # Surge 行: Reality 参数 + flow + encryption, 顺序与模式 1 一致, encryption 放最后
@@ -1198,10 +1206,10 @@ print_mode_block() { # $1=模式 $2=host $3=二维码说明 ; 纯打印, 不读�
   local mode="$1" host="$2" qr_note="$3"
   case "$mode" in
     1) printf '%s\n' "--- 模式 1: Reality 原版 (QuanX / Surge 正式版) ---" ;;
-    2) printf '%s\n' "--- 模式 2: VLESS Encryption (Surge / vless 链接) ---" ;;
+    2) if [ -n "$MODE_SNI" ]; then printf '%s\n' "--- 模式 2: XHTTP + Reality + PQ (Surge / vless 链接) ---"; else printf '%s\n' "--- 模式 2: 旧版 VLESS Encryption (运行 rescan 升级) ---"; fi ;;
     3) printf '%s\n' "--- 模式 3: Reality + Vision + VLESS Encryption (Surge / vless 链接) ---" ;;
   esac
-  if mode_has_reality "$mode"; then
+  if mode_has_reality "$mode" && [ -n "$MODE_SNI" ]; then
     printf '%s\n' "地址: ${host}:${MODE_PORT}  SNI/dest: ${MODE_SNI}  指纹: chrome (服务端不填, 客户端用)"
   else
     printf '%s\n' "地址: ${host}:${MODE_PORT}  (无 Reality/TLS, 加密靠 VLESS Encryption)"
@@ -1281,7 +1289,7 @@ show_all() { # 输出全部已装模式的客户端配置 (文件 + 终端 + 二
     [ -f "$png" ] && info "二维码已保存到 $png"
   done
   case " $modes " in *" 1 "*) info "模式 1: QuanX 要求 1.5.5+；Surge 要求 iOS 6.0.0+ 或 Mac 6.12.0+" ;; esac
-  case " $modes " in *" 2 "*|*" 3 "*) info "模式 2/3: Surge 行 + vless 链接, Surge 要求 iOS 6.0.0+ 或 Mac 6.12.0+, QuanX 不支持" ;; esac
+  case " $modes " in *" 2 "*|*" 3 "*) info "模式 2/3: Surge 行 + vless 链接, 请使用支持相关协议的 Surge 版本, QuanX 不支持" ;; esac
   warn "私钥在 $CONFIG_FILE 里, 别把配置文件 / 客户端文件发到公开地方"
 }
 
@@ -1434,14 +1442,11 @@ do_rescan_reinstall() { # 扫描邻居域名并重装: 只换 dest/SNI, UUID/密
   # 重装: 已有配置的 UUID/私钥/端口/shortId 全部保留, 只换 Reality 模式的 SNI;
   # 没装过就是全新安装, 用扫描到的域名做 dest/SNI。
   # 已装时把 REALITY_MODES 锁成已装的模式, do_install 就不问模式、也不丢模式;
-  # 只装了模式 2 (没 Reality) 时没域名可扫, 直接停下。
+
   local rescan_modes=""
   if [ -f "$CONFIG_FILE" ]; then
     rescan_modes="$(installed_modes)"
     if [ -n "$rescan_modes" ]; then
-      local rm2 has_reality=0
-      for rm2 in $rescan_modes; do mode_has_reality "$rm2" && has_reality=1; done
-      [ "$has_reality" = "1" ] || die "只装了 VLESS Encryption 模式 (模式 2), 没有 Reality 域名可扫, rescan 用不上"
       REALITY_MODES="$rescan_modes" REALITY_SNI="$recommended" do_install "$@"
       info "已用域名 $recommended 重装, 旧域名对应的客户端配置作废, 请用上面新的"
       return 0
@@ -1465,6 +1470,7 @@ do_reconfig() {
   old_uuid="$(inbound_value "$mode" uuid)"; old_priv="$(inbound_value "$mode" priv)"
   old_shortid="$(inbound_value "$mode" shortid)"; old_dec="$(inbound_value "$mode" decryption)"
   [ -n "$old_uuid" ] && [ -n "$old_port" ] || die "模式 $mode 配置不完整, 请删配置重装"
+  if [ "$mode" = "2" ] && [ -z "$old_priv" ]; then die "旧模式 2 需要先运行 rescan 扫描并升级为 XHTTP + Reality + PQ，旧客户端配置将失效"; fi
   local is_reality=0 is_enc=0
   mode_has_reality "$mode" && is_reality=1
   mode_has_enc "$mode" && is_enc=1
@@ -1729,10 +1735,10 @@ case "${1:-}" in
     printf '%s\n' "无参数时: 有终端进菜单 (1 查看配置 / 2 扫描重装 / 3 换端口 / 4 安装添加节点 / 5 完全卸载 / 6 实时日志 / 7 重启), 无终端 (管道/重定向) 直接安装"
     printf '%s\n' "模式: 1 Reality 原版 (QuanX/Surge) / 2 VLESS Encryption (Surge/链接) / 3 推荐组合 Reality+Encryption (Surge/链接); 安装时多选, 如 REALITY_MODES=1,3, 回车=全部"
     printf '%s\n' "端口: 模式 3 默认 443, 模式 1/2 默认 10000-30000 高端口; REALITY_PORT 只改第一个模式的端口"
-    printf '%s\n' "show: 输出各模式的客户端配置 (模式 1: Surge 行 + QuanX 行 + vless 链接; 模式 2/3: 只有 vless 链接) + 二维码"
+    printf '%s\n' "show: 输出各模式的客户端配置 (模式 1: Surge 行 + QuanX 行 + vless 链接; 模式 2/3: Surge 行 + vless 链接) + 二维码"
     printf '%s\n' "probe: 只测不改, 从两个机房回连各模式的端口, 报告外面能不能连进来"
     printf '%s\n' "安装完 443 会自动探活, 两个机房都连不进来就自动换高端口; REALITY_SKIP_PROBE=1 可关掉探活"
-    printf '%s\n' "rescan: 扫描邻居网段, 用推荐域名重装 (只换 Reality 模式的 dest/SNI, UUID/密钥/端口不变; 扫不到改用 www.apple.com; 只装模式 2 时没域名可扫)"
+    printf '%s\n' "rescan: 扫描邻居网段, 用推荐域名重装 (只换 Reality 模式的 dest/SNI, UUID/密钥/端口不变; 扫不到改用 www.apple.com)"
     printf '%s\n' "change-port: 只换一个模式的端口, 其余不变; 非交互用 REALITY_PORT=新端口 bash reality change-port, 多模式时再加 REALITY_MODE=1/2/3"
     printf '%s\n' "reconfig: 改一个模式的伪装域名 / 端口 / 重新生成密钥, 旧的客户端配置作废; 多模式时加 REALITY_MODE=1/2/3"
     printf '%s\n' "remove-mode: 卸掉一个模式, 其他模式不动; 用法: bash reality remove-mode 2 或 REALITY_MODE=2 bash reality remove-mode"
