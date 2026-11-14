@@ -17,6 +17,9 @@ inb=$(inbound_json 2 11111111-2222-3333-4444-555555555555 24432 scanned.example.
 printf "{\"inbounds\":[%s]}" "$inb" > "$CONFIG_FILE"
 jq -e '\'' .inbounds[0] | .streamSettings.network == "xhttp" and .streamSettings.security == "reality" and .streamSettings.realitySettings.serverNames[0] == "scanned.example.com" and .settings.decryption != "none" '\'' "$CONFIG_FILE" >/dev/null || { echo "mode 2 server configuration incorrect"; exit 1; }
 mode_has_reality 2 || { echo "mode 2 must use Reality"; exit 1; }
+[ "$(mode_display_name 2 surge LA "" 3)" = "LA-XHTTP-Reality-PQ" ] || { echo "default Surge name incorrect"; exit 1; }
+[ "$(mode_display_name 2 link LA "" 3)" = "LA-XHTTP-Reality-PQ" ] || { echo "default link name incorrect"; exit 1; }
+[ "$(mode_display_name 2 link LA MyNode 3)" = "MyNode-XHTTP-Reality-PQ" ] || { echo "custom prefix incorrect"; exit 1; }
 mode_client_config 2 203.0.113.1 203.0.113.1 "" 1
 case "$MODE_SURGE" in *xhttp=true*sni=scanned.example.com*reality-public-key=*encryption=mlkem768x25519plus*) ;; *) echo "Surge output incorrect: $MODE_SURGE"; exit 1;; esac
 case "$MODE_LINK" in *security=reality*sni=scanned.example.com*type=xhttp*) ;; *) echo "link incorrect: $MODE_LINK"; exit 1;; esac
@@ -24,6 +27,7 @@ case "$MODE_LINK" in *security=reality*sni=scanned.example.com*type=xhttp*) ;; *
 jq "(.inbounds[0].streamSettings) = {network:\"tcp\",security:\"none\"}" "$CONFIG_FILE" > "$1/legacy.json"
 CONFIG_FILE="$1/legacy.json"
 mode_client_config 2 203.0.113.1 203.0.113.1 "" 1
+case "$MODE_SURGE" in Surge-Enc\ =*) ;; *) echo "legacy name incorrect"; exit 1;; esac
 case "$MODE_LINK" in *security=none*type=tcp*) ;; *) echo "legacy output incorrect"; exit 1;; esac
 ' _ "$tmp"
 echo 'XHTTP mode tests passed'

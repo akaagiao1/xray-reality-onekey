@@ -116,13 +116,13 @@ vless://<UUID>@<服务器IP>:24443?encryption=none&flow=xtls-rprx-vision&securit
 **模式 2：Surge** — 复制到 `[Proxy]`，使用扫描域名作为 SNI：
 
 ```ini
-LA-Surge-Enc = vless, 服务器IP, 24443, username=<UUID>, xhttp=true, xhttp-path=/, sni=<你的邻居域名>, reality-public-key=<公钥>, reality-short-id=<shortId>, encryption=<mlkem768x25519plus串>
+LA-XHTTP-Reality-PQ = vless, 服务器IP, 24443, username=<UUID>, xhttp=true, xhttp-path=/, sni=<你的邻居域名>, reality-public-key=<公钥>, reality-short-id=<shortId>, encryption=<mlkem768x25519plus串>
 ```
 
 **模式 2：vless:// 链接**：
 
 ```text
-vless://<UUID>@<服务器IP>:24443?encryption=<mlkem768x25519plus串>&security=reality&sni=<你的邻居域名>&fp=chrome&pbk=<公钥>&sid=<shortId>&type=xhttp&path=%2F&mode=auto#LA-Enc
+vless://<UUID>@<服务器IP>:24443?encryption=<mlkem768x25519plus串>&security=reality&sni=<你的邻居域名>&fp=chrome&pbk=<公钥>&sid=<shortId>&type=xhttp&path=%2F&mode=auto#LA-XHTTP-Reality-PQ
 ```
 
 旧版模式 2 仍可查看原配置；运行 `rescan` 会将其升级为新模式，旧客户端配置随之失效。
@@ -145,9 +145,9 @@ vless://<UUID>@<服务器IP>:443?encryption=<mlkem768x25519plus串>&flow=xtls-rp
 
 | 客户端 | 模式 1（洛杉矶为例） | 模式 2 | 模式 3 |
 | --- | --- | --- | --- |
-| Surge | `LA-Surge-Reality` | `LA-Surge-Enc` | `LA-Surge-RealityEnc` |
+| Surge | `LA-Surge-Reality` | `LA-XHTTP-Reality-PQ` | `LA-Surge-RealityEnc` |
 | QuanX `tag=` | `LA-Quanx-Reality` | — | — |
-| vless:// `#` 后 | `LA-Reality` | `LA-Enc` | `LA-RealityEnc` |
+| vless:// `#` 后 | `LA-Reality` | `LA-XHTTP-Reality-PQ` | `LA-RealityEnc` |
 
 地区码如洛杉矶 `LA`、旧金山 `SF`、纽约 `NY`、法兰克福 `FRA`、香港 `HK`、新加坡 `SIN`、东京 `TYO`；不在映射表里的城市用城市名去空格转全大写，城市查不到用国家码，所在地查不到则不带地区码（`Surge-Reality` / `Quanx-Reality` / `Reality`）。`REALITY_TAG` 指定后：只装模式 1 时三处都用指定的名字；装了多个模式时在指定名字后加模式后缀。名字只影响客户端显示，已导入的旧名字不会自动变，重新导入才会用新名字。
 

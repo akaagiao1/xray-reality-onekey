@@ -86,7 +86,7 @@
 #   REALITY_TAG    节点名, 指定后各模式的名字都以它为前缀再加模式后缀;
 #                不指定则按 IP 所在地自动生成: 模式 1 是 LA-Surge-Reality /
 #                LA-Quanx-Reality / LA-Reality (以洛杉矶为例), 模式 2 是
-#                LA-Surge-Enc / LA-Enc, 模式 3 是 LA-Surge-RealityEnc /
+#                LA-XHTTP-Reality-PQ / LA-XHTTP-Reality-PQ, 模式 3 是 LA-Surge-RealityEnc /
 #                LA-RealityEnc; 只装模式 1 时指定 TAG 则三处都原样用它
 # 节点名规则 (用户要求, 2026-11-12): 默认名不再是笼统的 Reality-QuanX,
 #   而是按本机公网 IP 的所在地生成, 三个客户端各带自己的后缀:
@@ -95,7 +95,7 @@
 #   (洛杉矶 LA、旧金山 SF、纽约 NY、法兰克福 FRA、香港 HK、新加坡 SIN、东京 TYO 等,
 #   不在映射表里的城市直接用城市名去空格, 城市查不到用国家码,
 #   所在地查不到则不带地区码: Surge-Reality / Quanx-Reality / Reality);
-#   模式 2/3 的后缀分别是 Enc 与 RealityEnc, 用来跟模式 1 区分开;
+#   模式 2/3 的后缀分别是 XHTTP-Reality-PQ 与 RealityEnc, 用来跟模式 1 区分开;
 #   名字只是客户端里显示的, 改名不影响连接。
 #   REALITY_HOST   客户端填的地址, 默认自动探测公网 IP, 也可填域名
 #   REALITY_UUID   指定 UUID (只给第一个模式), 不指定则随机生成
@@ -1027,8 +1027,8 @@ mode_name_suffix() { # $1=模式 $2=客户端 surge|qx|link ; 输出名字后缀
     1:surge) printf 'Surge-Reality' ;;
     1:qx) printf 'Quanx-Reality' ;;
     1:link) printf 'Reality' ;;
-    2:surge) printf 'Surge-Enc' ;;
-    2:link) printf 'Enc' ;;
+    2:surge) printf 'XHTTP-Reality-PQ' ;;
+    2:link) printf 'XHTTP-Reality-PQ' ;;
     3:surge) printf 'Surge-RealityEnc' ;;
     3:link) printf 'RealityEnc' ;;
   esac
@@ -1168,6 +1168,10 @@ mode_client_config() { # $1=模式 $2=host $3=加括号的host $4=地区码前�
   local surge_name link_name ubhost
   surge_name="$(mode_display_name "$mode" surge "$prefix" "${REALITY_TAG:-}" "$count")"
   link_name="$(mode_display_name "$mode" link "$prefix" "${REALITY_TAG:-}" "$count")"
+  if [ "$legacy_mode2" = "1" ]; then
+    surge_name="${surge_name%XHTTP-Reality-PQ}Surge-Enc"
+    link_name="${link_name%XHTTP-Reality-PQ}Enc"
+  fi
   # Surge 行的 host 是逗号分隔的字段, IPv6 写裸地址 (带方括号反而可能不识别)
   ubhost="${host#[}"; ubhost="${ubhost%]}"
   # Surge 行: 节点名里的分隔符会破坏配置行, 替换为空格

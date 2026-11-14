@@ -405,8 +405,8 @@ uuid2="$(jq -r '.inbounds[] | select(.tag=="vless-enc") | .settings.clients[0].i
 uuid3="$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .settings.clients[0].id' "$tmp/xray-etc/config.json")"
 enc_str="mlkem768x25519plus.native.0rtt.$b43"
 sid3="$(jq -r '.inbounds[] | select(.tag=="vless-reality-enc") | .streamSettings.realitySettings.shortIds[0]' "$tmp/xray-etc/config.json")"
-grep -qF "Surge-Enc = vless, 203.0.113.1, $p2, username=$uuid2, xhttp=true, xhttp-path=/, sni=www.amazon.com, reality-public-key=$b43" "$tmp/client.txt" || { echo "§11: 模式 2 Surge 行格式不对"; exit 1; }
-m2line="$(grep 'Surge-Enc = vless' "$tmp/client.txt")"
+grep -qF "XHTTP-Reality-PQ = vless, 203.0.113.1, $p2, username=$uuid2, xhttp=true, xhttp-path=/, sni=www.amazon.com, reality-public-key=$b43" "$tmp/client.txt" || { echo "§11: 模式 2 Surge 行格式不对"; exit 1; }
+m2line="$(grep 'XHTTP-Reality-PQ = vless' "$tmp/client.txt")"
 case "$m2line" in *flow=*) echo "§11: 模式 2 不应带 flow"; exit 1;; *reality-short-id=*encryption=*) ;; *) echo "§11: 模式 2 缺 Reality 或加密参数"; exit 1;; esac
 grep -qF "Surge-RealityEnc = vless, 203.0.113.1, 443, username=$uuid3, flow=xtls-rprx-vision, sni=www.amazon.com, reality-public-key=$b43, reality-short-id=$sid3, encryption=$enc_str" "$tmp/client.txt" || { echo "§11: 模式 3 Surge 行格式不对"; exit 1; }
 printf 'SECTION11-OK\n'
