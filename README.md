@@ -1,12 +1,13 @@
 # Xray VLESS 多模式一键脚本
 
-服务端 Xray-core，一个配置、多个入站，三种模式可单装、可多选、可混装：
+服务端 Xray-core，一个配置、多个入站，四种模式可单装、可多选、可混装：
 
 | 模式 | 协议 | 默认端口 | 客户端配置 |
 | --- | --- | --- | --- |
 | 1 Reality 原版 | VLESS / TCP + REALITY + xtls-rprx-vision | 高端口（10000–30000） | Surge 行 + QuanX 行 + vless:// 链接 + 二维码 |
 | 2 XHTTP + REALITY + PQ | VLESS / XHTTP + REALITY + VLESS Encryption（mlkem768x25519plus） | 高端口（10000–30000） | Surge 行 + vless:// 链接 + 二维码 |
 | 3 推荐组合 | VLESS / TCP + REALITY + Vision + VLESS Encryption | 443（被占/被堵自动换高端口） | Surge 行 + vless:// 链接 + 二维码 |
+| 4 Hysteria 2 | Hysteria 2 / QUIC + 自签 TLS | 高端口（UDP） | Surge 行 + hysteria2:// 链接 + 二维码 |
 
 模式 2 使用支持 XHTTP、REALITY 和 VLESS Encryption 的 Surge 版本；模式 3 使用 VLESS Encryption。两者均不支持 QuanX，提供 Surge 行和 vless:// 链接。PQ 指 VLESS Encryption 的 ML-KEM-768 + X25519 握手，使用 X25519 服务端认证密钥。
 
@@ -210,3 +211,15 @@ REALITY_HOST=example.com bash reality install
 
 - `tests/`：不真装 Xray 的测试（替身 Xray + 替身扫描脚本），分别验 Surge/QuanX 输出、密钥解析、菜单 / 换端口 / 扫描重装 / 完全卸载、443 探活、多模式（解析 / 派生 / 端口 / 输出格式 + 真 Xray 端到端握手）。
 - `vendor/`：扫描器（RealiTLScanner）和检测器（RealityChecker）的固定版本二进制 + 检测数据快照（CDN 关键词、热门站点、GFW 列表、国家数据库），下载时校验 SHA-256，不匹配的不执行，检测数据不自动更新。
+
+## 模式 4：Hysteria 2
+
+在安装/添加节点时选择 `4`（或 `REALITY_MODES=4 bash reality install`）。脚本生成自签名 TLS 证书、随机认证密码和 UDP 监听端口；重新安装时保留证书、密码和端口。客户端需支持 Hysteria 2，输出的链接采用 `insecure=1`：这会跳过证书验证。更安全的做法是将服务端 `/usr/local/etc/xray/hy2.crt` 安全地复制到客户端并配置为受信任证书，使用 SNI `hy2.local` 并开启证书验证。
+
+Brutal 提供客户端上传/下载 20/100、50/200（默认）、100/500 Mbps 和自定义选项。这些只是初始建议，请按实际可用带宽调整。必须在客户端填写这两个值；仅导入链接不一定会自动配置 Brutal。Surge 配置行自动填写 `download-bandwidth`；Surge 官方文档未提供上传带宽参数。服务器端不限制客户端协商速率。
+
+可选 UDP 端口跳跃：交互输入范围如 `20000-20100`，或设置 `HY2_HOP_PORTS=20000-20100`；默认关闭。Linux 需要 iptables，脚本创建专用 NAT 规则并在服务启动时恢复，卸载时清理；安全组需放行监听端口及跳跃范围的 UDP。跳跃范围会重定向到 HY2，不要选择其他服务使用的 UDP 端口。Surge 配置行自动包含跳跃范围及 30 秒间隔；其他客户端需支持端口跳跃并手动填写相同范围与跳跃间隔，普通分享链接仅含固定端口。`HY2_HOP_PORTS=off` 可禁用。IPv6 跳跃还需要可用的 ip6tables 和 IPv6 NAT。
+
+非交互示例：`REALITY_MODES=4 HY2_UP=50 HY2_DOWN=200 HY2_HOP_PORTS=20000-20100 bash reality install`。端口跳跃不是所有网络都需要，修改现有服务的端口范围前应检查防火墙和其他服务。
+
+模式 4 也可通过 `REALITY_MODES=4` 指定；单独使用 HY2 不需要扫描 Reality 域名。
