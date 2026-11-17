@@ -214,12 +214,12 @@ REALITY_HOST=example.com bash reality install
 
 ## 模式 4：Hysteria 2
 
-在安装/添加节点时选择 `4`（或 `REALITY_MODES=4 bash reality install`）。脚本生成自签名 TLS 证书、随机认证密码和 UDP 监听端口；重新安装时保留证书、密码和端口。客户端需支持 Hysteria 2，输出的链接采用 `insecure=1`：这会跳过证书验证。更安全的做法是将服务端 `/usr/local/etc/xray/hy2.crt` 安全地复制到客户端并配置为受信任证书，使用 SNI `hy2.local` 并开启证书验证。
+在安装/添加节点时选择 `4`，或执行 `REALITY_MODES=4 bash reality install`。脚本生成自签名证书、随机密码及 UDP 监听端口，重装保留证书和密码。节点名默认为地区码加协议名，例如 `LA-Hysteria2`；查不到地区时为 `Hysteria2`，也可用 `REALITY_TAG` 指定前缀。
 
-Brutal 提供客户端上传/下载 20/100、50/200（默认）、100/500 Mbps 和自定义选项。这些只是初始建议，请按实际可用带宽调整。必须在客户端填写这两个值；仅导入链接不一定会自动配置 Brutal。Surge 配置行自动填写 `download-bandwidth`；Surge 官方文档未提供上传带宽参数。服务器端不限制客户端协商速率。
+Surge 配置行自动填写自签证书的 SHA-256 固定指纹，用于验证服务器身份；更换证书后需重新生成并更新客户端配置。通用 `hysteria2://` 链接为了兼容导入仍使用 `insecure=1`（不验证证书），支持时建议将 `/usr/local/etc/xray/hy2.crt` 安全传给客户端并启用验证。
 
-可选 UDP 端口跳跃：交互输入范围如 `20000-20100`，或设置 `HY2_HOP_PORTS=20000-20100`；默认关闭。Linux 需要 iptables，脚本创建专用 NAT 规则并在服务启动时恢复，卸载时清理；安全组需放行监听端口及跳跃范围的 UDP。跳跃范围会重定向到 HY2，不要选择其他服务使用的 UDP 端口。Surge 配置行自动包含跳跃范围及 30 秒间隔；其他客户端需支持端口跳跃并手动填写相同范围与跳跃间隔，普通分享链接仅含固定端口。`HY2_HOP_PORTS=off` 可禁用。IPv6 跳跃还需要可用的 ip6tables 和 IPv6 NAT。
+Brutal 档位按**客户端视角**填写上传/下载，推荐起点为 50/200 Mbps，可选择 20/100、100/500 或自定义，按实际链路可用带宽调整。客户端上传对应服务器下载；客户端下载对应服务器上传。服务端上行和下行限制均为 0，表示不限制，由客户端协商。不同客户端需要分别填写速率；Surge 官方仅提供 `download-bandwidth` 参数，脚本自动填入客户端下载速率，上传由 Surge 处理。链接本身不一定带宽设置。
 
-非交互示例：`REALITY_MODES=4 HY2_UP=50 HY2_DOWN=200 HY2_HOP_PORTS=20000-20100 bash reality install`。端口跳跃不是所有网络都需要，修改现有服务的端口范围前应检查防火墙和其他服务。
+新安装默认开启 UDP 端口跳跃 `20000-50000`，间隔 30 秒；可交互修改或通过 `HY2_HOP_PORTS=off` 关闭。重装保留已有设置。跳跃需要 Linux iptables（缺少时尝试安装），在服务启动时恢复专用 NAT 规则，卸载时清理。请在云安全组放行跳跃范围及实际监听端口的 UDP；范围内若有其他 UDP 服务，请选择空闲范围。Surge 行自动包含跳跃设置，其他客户端需手动填写同一范围和间隔；通用链接仅包含固定端口。IPv6 跳跃还需要可用的 ip6tables 和 IPv6 NAT。
 
-模式 4 也可通过 `REALITY_MODES=4` 指定；单独使用 HY2 不需要扫描 Reality 域名。
+非交互示例：`REALITY_MODES=4 HY2_UP=50 HY2_DOWN=200 bash reality install`。模式 4 也可通过 `REALITY_MODES=4` 指定；单独使用 HY2 不需要扫描 Reality 域名。
