@@ -69,15 +69,15 @@ bash -c '
   check "1,1,2" "1 2"
   check "1 2 3" "1 2 3"
   check "2,3" "2 3"
-  check "all" "1 2 3 4"
-  check "ALL" "1 2 3 4"
-  check "全部" "1 2 3 4"
-  check "1,全部" "1 2 3 4"
+  check "all" "1 2 3"
+  check "ALL" "1 2 3"
+  check "全部" "1 2 3"
+  check "1,全部" "1 2 3"
   check "1，3" "1 3"
-  check "4" "4"
+  check "4" "FAIL"
   check "x" "FAIL"
   check "" "FAIL"
-  check "1,4" "1 4"
+  check "1,4" "FAIL"
   check "0" "FAIL"
   printf "SECTION1-OK\n"
 ' _ "$tmp/harness.sh" "$tmp"
@@ -365,7 +365,7 @@ printf 'SECTION9-OK\n'
 out="$(printf '1,3\n' | bash -c 'source "$1" "$2"; prompt_modes 2>/dev/null' _ "$tmp/harness.sh" "$tmp")"
 [ "$out" = "1 3" ] || { echo "§10a: got [$out] want [1 3]"; exit 1; }
 out="$(printf '\n' | bash -c 'source "$1" "$2"; prompt_modes 2>/dev/null' _ "$tmp/harness.sh" "$tmp")"
-[ "$out" = "1 2 3 4" ] || { echo "§10b: got [$out] want [1 2 3 4]"; exit 1; }
+[ "$out" = "1 2 3" ] || { echo "§10b: got [$out] want [1 2 3]"; exit 1; }
 out="$(printf '2\n' | bash -c 'source "$1" "$2"; prompt_modes 2>/dev/null' _ "$tmp/harness.sh" "$tmp")"
 [ "$out" = "2" ] || { echo "§10c: got [$out] want [2]"; exit 1; }
 if printf 'x\n9\n0\n' | bash -c 'source "$1" "$2"; prompt_modes 2>/dev/null' _ "$tmp/harness.sh" "$tmp"; then

@@ -42,7 +42,7 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/auto-reality.XXXXXXXX") || error '无法创建临时目录。'
 trap 'rm -rf -- "$workdir"' EXIT
-base='https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/37845a9b6bb7f32c1819dbe49cc059168a6f7f7b'
+base='https://raw.githubusercontent.com/akaagiao1/xray-reality-onekey/5e7a3201ed665a3592d793c0ff976d3a7753cb55'
 ensure_clean_install() {
   existing_xray || return 0
   [[ -t 0 ]] || error '检测到现有 Xray；非交互模式无法确认完全卸载，已停止。'
