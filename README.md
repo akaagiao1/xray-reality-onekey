@@ -91,6 +91,16 @@ bash <(curl -fsSL https://raw.githubusercontent.com/akaagiao1/xray-reality-oneke
 
 安装时会问伪装域名：填筛选出的邻居域名，直接回车则回退到 `www.amazon.com`；填了 CF 站点或解析到 CF IP 的站点会被拒绝并重问（最多 3 次）。非交互安装不提问，用 `REALITY_SNI` 指定。
 
+## 任意门端口转发
+
+执行 `bash reality` 选择菜单 8，或执行 `bash reality tunnel`，可添加、查看或删除端口转发。先安装 Xray 并确保服务正在运行。添加时输入本机监听端口、目标 IP 或域名、目标端口，选择 TCP、UDP 或两者（回车默认 TCP+UDP）；可以添加多个转发。IPv6 地址可带或不带方括号。
+
+例如监听 `20001`、目标 `192.0.2.10:443`、网络选择 TCP，连接本机 `20001/TCP` 的流量会由 Xray 直连目标。每个任意门使用单独出站及路由，现有 VLESS 入站保留；写入前校验配置，启动失败会尝试恢复。
+
+监听地址为 `::`，Xray 通常同时监听 IPv4 和 IPv6（取决于系统及网络环境）；须按需在系统防火墙及云平台安全组放行对应 TCP/UDP 端口。任意门本身没有身份认证或传输加密，公网开放后外部可连接转发；删除时不自动更改防火墙。目标地址应为你有权使用的服务。目标写作 `127.0.0.1` 表示该 Xray 服务器本机，不是用户设备。
+
+验证：`bash tests/test-tunnel.sh`；设置 `XRAY_TEST_BIN` 后可运行 `python tests/test-tunnel-e2e.py` 测试 TCP/UDP 实际转发。
+
 ## 客户端配置
 
 以下示例以洛杉矶节点为例，请用脚本输出的真实值。
